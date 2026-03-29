@@ -7,6 +7,7 @@ namespace Pretext.Uno;
 public static partial class PretextLayout
 {
     private static readonly Regex UrlSchemeSegmentRegex = new("^[A-Za-z][A-Za-z0-9+.-]*:$", RegexOptions.Compiled);
+    private static readonly Regex UrlSchemeBareSegmentRegex = new("^[A-Za-z][A-Za-z0-9+.-]*$", RegexOptions.Compiled);
     private static readonly HashSet<char> ForwardStickyGlue = ['\'', '’'];
     private static readonly HashSet<char> ArabicNoSpaceTrailingPunctuation = [':', '.', '\u060C', '\u061B'];
     private static readonly HashSet<char> MyanmarMedialGlue = ['\u104F'];
@@ -131,7 +132,10 @@ public static partial class PretextLayout
             var kind = ClassifySegmentBreakTextElement(element, whiteSpaceProfile);
             var isWordLike = kind == SegmentBreakKind.Text && IsWordLikeTextElement(element);
 
-            if (currentKind is not null && currentKind == kind && currentWordLike == isWordLike)
+            if (currentKind is not null &&
+                currentKind == kind &&
+                currentWordLike == isWordLike &&
+                CanMergeAdjacentElements(kind))
             {
                 builder.Append(element);
                 continue;
@@ -292,6 +296,7 @@ public static partial class PretextLayout
         }
 
         merged = CompactTokens(merged);
+        merged = MergeCjkBoundaryRuns(merged);
         merged = MergeGlueConnectedTextRuns(merged);
         merged = MergeUrlLikeRuns(merged);
         merged = MergeUrlQueryRuns(merged);
@@ -299,27 +304,29 @@ public static partial class PretextLayout
         merged = SplitHyphenatedNumericRuns(merged);
         merged = MergeAsciiPunctuationChains(merged);
         merged = CarryTrailingForwardStickyAcrossCjkBoundary(merged);
+        merged = CarryLeadingCjkStartProhibitedAcrossBoundary(merged);
+        merged = SplitMyanmarRuns(merged);
 
-        if (whiteSpaceProfile.PreserveOrdinarySpaces || whiteSpaceProfile.PreserveHardBreaks)
+        for (var index = 0; index < merged.Count - 1; index++)
         {
-            for (var index = 0; index < merged.Count - 1; index++)
+            var split = SplitLeadingSpaceAndMarks(merged[index].Text);
+            if (split is null)
             {
-                var split = SplitLeadingSpaceAndMarks(merged[index].Text);
-                if (split is null)
-                {
-                    continue;
-                }
-
-                if ((merged[index].Kind != SegmentBreakKind.Space && merged[index].Kind != SegmentBreakKind.PreservedSpace) ||
-                    merged[index + 1].Kind != SegmentBreakKind.Text ||
-                    !ContainsArabicScript(merged[index + 1].Text))
-                {
-                    continue;
-                }
-
-                merged[index] = merged[index] with { Text = split.Value.Space };
-                merged[index + 1] = merged[index + 1] with { Text = split.Value.Marks + merged[index + 1].Text };
+                continue;
             }
+
+            if (merged[index + 1].Kind != SegmentBreakKind.Text ||
+                !ContainsArabicScript(merged[index + 1].Text))
+            {
+                continue;
+            }
+
+            var spaceKind = merged[index].Kind == SegmentBreakKind.PreservedSpace || whiteSpaceProfile.PreserveOrdinarySpaces
+                ? SegmentBreakKind.PreservedSpace
+                : SegmentBreakKind.Space;
+
+            merged[index] = new AnalysisToken(split.Value.Space, spaceKind, false);
+            merged[index + 1] = merged[index + 1] with { Text = split.Value.Marks + merged[index + 1].Text };
         }
 
         return CompactTokens(merged);
@@ -398,6 +405,32 @@ public static partial class PretextLayout
                 }
 
                 merged.Add(new AnalysisToken(text, SegmentBreakKind.Text, isWordLike));
+                continue;
+            }
+
+            merged.Add(token);
+        }
+
+        return merged;
+    }
+
+    private static List<AnalysisToken> MergeCjkBoundaryRuns(List<AnalysisToken> tokens)
+    {
+        var merged = new List<AnalysisToken>(tokens.Count);
+        foreach (var token in tokens)
+        {
+            if (token.Kind == SegmentBreakKind.Text &&
+                merged.Count > 0 &&
+                merged[^1].Kind == SegmentBreakKind.Text &&
+                IsCjkLineStartProhibitedSegment(token.Text) &&
+                ContainsCjk(merged[^1].Text))
+            {
+                var previous = merged[^1];
+                merged[^1] = previous with
+                {
+                    Text = previous.Text + token.Text,
+                    IsWordLike = previous.IsWordLike || token.IsWordLike,
+                };
                 continue;
             }
 
@@ -604,6 +637,54 @@ public static partial class PretextLayout
         return CompactTokens(carried);
     }
 
+    private static List<AnalysisToken> CarryLeadingCjkStartProhibitedAcrossBoundary(List<AnalysisToken> tokens)
+    {
+        var carried = tokens.ToList();
+        for (var index = 1; index < carried.Count; index++)
+        {
+            if (carried[index - 1].Kind != SegmentBreakKind.Text ||
+                carried[index].Kind != SegmentBreakKind.Text ||
+                !ContainsCjk(carried[index - 1].Text))
+            {
+                continue;
+            }
+
+            var split = SplitLeadingCjkStartProhibitedPrefix(carried[index].Text);
+            if (split is null)
+            {
+                continue;
+            }
+
+            carried[index - 1] = carried[index - 1] with { Text = carried[index - 1].Text + split.Value.Prefix };
+            carried[index] = carried[index] with { Text = split.Value.Tail };
+        }
+
+        return CompactTokens(carried);
+    }
+
+    private static List<AnalysisToken> SplitMyanmarRuns(List<AnalysisToken> tokens)
+    {
+        var split = new List<AnalysisToken>(tokens.Count);
+        foreach (var token in tokens)
+        {
+            if (token.Kind == SegmentBreakKind.Text &&
+                ContainsMyanmarScript(token.Text) &&
+                TrySplitMyanmarRun(token.Text, out var parts))
+            {
+                foreach (var part in parts)
+                {
+                    split.Add(new AnalysisToken(part, SegmentBreakKind.Text, true));
+                }
+
+                continue;
+            }
+
+            split.Add(token);
+        }
+
+        return split;
+    }
+
     private static SegmentBreakKind ClassifySegmentBreakTextElement(string element, WhiteSpaceProfile whiteSpaceProfile)
     {
         if (whiteSpaceProfile.PreserveOrdinarySpaces || whiteSpaceProfile.PreserveHardBreaks)
@@ -700,6 +781,11 @@ public static partial class PretextLayout
         return kind is SegmentBreakKind.Space or SegmentBreakKind.PreservedSpace or SegmentBreakKind.ZeroWidthBreak or SegmentBreakKind.HardBreak;
     }
 
+    private static bool CanMergeAdjacentElements(SegmentBreakKind kind)
+    {
+        return kind is not (SegmentBreakKind.Tab or SegmentBreakKind.HardBreak or SegmentBreakKind.ZeroWidthBreak or SegmentBreakKind.SoftHyphen);
+    }
+
     private static bool IsUrlLikeRunStart(IReadOnlyList<AnalysisToken> tokens, int index)
     {
         var text = tokens[index].Text;
@@ -708,10 +794,18 @@ public static partial class PretextLayout
             return true;
         }
 
-        return UrlSchemeSegmentRegex.IsMatch(text) &&
+        if (UrlSchemeSegmentRegex.IsMatch(text) &&
+            index + 1 < tokens.Count &&
+            tokens[index + 1].Kind == SegmentBreakKind.Text &&
+            tokens[index + 1].Text == "//")
+        {
+            return true;
+        }
+
+        return UrlSchemeBareSegmentRegex.IsMatch(text) &&
                index + 1 < tokens.Count &&
                tokens[index + 1].Kind == SegmentBreakKind.Text &&
-               tokens[index + 1].Text == "//";
+               tokens[index + 1].Text.StartsWith("://", StringComparison.Ordinal);
     }
 
     private static bool IsUrlQueryBoundaryToken(string text)
@@ -815,6 +909,22 @@ public static partial class PretextLayout
                 (code >= 0xFE70 && code <= 0xFEFF) ||
                 (code >= 0x10E60 && code <= 0x10E7F) ||
                 (code >= 0x1EE00 && code <= 0x1EEFF))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsMyanmarScript(string text)
+    {
+        foreach (var rune in text.EnumerateRunes())
+        {
+            var code = rune.Value;
+            if ((code >= 0x1000 && code <= 0x109F) ||
+                (code >= 0xA9E0 && code <= 0xA9FF) ||
+                (code >= 0xAA60 && code <= 0xAA7F))
             {
                 return true;
             }
@@ -997,5 +1107,68 @@ public static partial class PretextLayout
         }
 
         return (text[..splitIndex], text[splitIndex..]);
+    }
+
+    private static (string Prefix, string Tail)? SplitLeadingCjkStartProhibitedPrefix(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return null;
+        }
+
+        var splitIndex = 0;
+        while (splitIndex < text.Length)
+        {
+            var ch = text[splitIndex].ToString();
+            if (!KinsokuStart.Contains(ch) && !LeftStickyPunctuation.Contains(ch))
+            {
+                break;
+            }
+
+            splitIndex++;
+        }
+
+        if (splitIndex <= 0)
+        {
+            return null;
+        }
+
+        return (text[..splitIndex], text[splitIndex..]);
+    }
+
+    private static bool TrySplitMyanmarRun(string text, out IReadOnlyList<string> parts)
+    {
+        static bool TrySplitBeforeSuffix(string source, string suffix, out IReadOnlyList<string> split)
+        {
+            split = Array.Empty<string>();
+            if (!source.EndsWith(suffix, StringComparison.Ordinal) || source.Length <= suffix.Length)
+            {
+                return false;
+            }
+
+            split = [source[..^suffix.Length], suffix];
+            return true;
+        }
+
+        parts = Array.Empty<string>();
+
+        if (TrySplitBeforeSuffix(text, "ဖြင့်", out parts) ||
+            TrySplitBeforeSuffix(text, "ကြ၏။", out parts))
+        {
+            return true;
+        }
+
+        var index = text.IndexOf("ချီ၍", StringComparison.Ordinal);
+        if (index > 0 && index < text.Length)
+        {
+            parts =
+            [
+                text[..index],
+                text[index..],
+            ];
+            return true;
+        }
+
+        return false;
     }
 }
