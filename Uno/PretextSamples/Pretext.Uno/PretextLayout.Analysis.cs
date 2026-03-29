@@ -1,0 +1,1001 @@
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace Pretext.Uno;
+
+public static partial class PretextLayout
+{
+    private static readonly Regex UrlSchemeSegmentRegex = new("^[A-Za-z][A-Za-z0-9+.-]*:$", RegexOptions.Compiled);
+    private static readonly HashSet<char> ForwardStickyGlue = ['\'', '’'];
+    private static readonly HashSet<char> ArabicNoSpaceTrailingPunctuation = [':', '.', '\u060C', '\u061B'];
+    private static readonly HashSet<char> MyanmarMedialGlue = ['\u104F'];
+
+    private readonly record struct EngineProfile(
+        double LineFitEpsilon,
+        bool CarryCjkAfterClosingQuote,
+        bool PreferPrefixWidthsForBreakableRuns,
+        bool PreferEarlySoftHyphenBreak);
+
+    private readonly record struct WhiteSpaceProfile(
+        WhiteSpaceMode Mode,
+        bool PreserveOrdinarySpaces,
+        bool PreserveHardBreaks);
+
+    private readonly record struct AnalysisToken(string Text, SegmentBreakKind Kind, bool IsWordLike);
+
+    private static EngineProfile GetEngineProfile()
+    {
+        // Favor the Chromium-flavored defaults used by the public demos.
+        return new EngineProfile(
+            LineFitEpsilon: 0.005,
+            CarryCjkAfterClosingQuote: true,
+            PreferPrefixWidthsForBreakableRuns: false,
+            PreferEarlySoftHyphenBreak: false);
+    }
+
+    private static WhiteSpaceProfile GetWhiteSpaceProfile(WhiteSpaceMode whiteSpace)
+    {
+        return whiteSpace == WhiteSpaceMode.PreWrap
+            ? new WhiteSpaceProfile(whiteSpace, PreserveOrdinarySpaces: true, PreserveHardBreaks: true)
+            : new WhiteSpaceProfile(whiteSpace, PreserveOrdinarySpaces: false, PreserveHardBreaks: false);
+    }
+
+    private static List<AnalysisToken> AnalyzeTokens(string text, WhiteSpaceMode whiteSpace)
+    {
+        var whiteSpaceProfile = GetWhiteSpaceProfile(whiteSpace);
+        var normalized = whiteSpaceProfile.Mode == WhiteSpaceMode.PreWrap
+            ? NormalizeWhitespacePreWrap(text ?? string.Empty)
+            : NormalizeWhitespaceNormal(text ?? string.Empty);
+
+        if (normalized.Length == 0)
+        {
+            return [];
+        }
+
+        var initial = BuildInitialTokens(normalized, whiteSpaceProfile);
+        return BuildMergedTokens(initial, GetEngineProfile(), whiteSpaceProfile);
+    }
+
+    private static string NormalizeWhitespaceNormal(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder(text.Length);
+        var pendingSpace = false;
+        var sawContent = false;
+
+        foreach (var ch in text)
+        {
+            if (ch is ' ' or '\t' or '\n' or '\r' or '\f')
+            {
+                if (sawContent)
+                {
+                    pendingSpace = true;
+                }
+
+                continue;
+            }
+
+            if (pendingSpace)
+            {
+                builder.Append(' ');
+                pendingSpace = false;
+            }
+
+            builder.Append(ch);
+            sawContent = true;
+        }
+
+        return builder.ToString();
+    }
+
+    private static string NormalizeWhitespacePreWrap(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        return text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Replace('\f', '\n');
+    }
+
+    private static List<AnalysisToken> BuildInitialTokens(string text, WhiteSpaceProfile whiteSpaceProfile)
+    {
+        var tokens = new List<AnalysisToken>();
+        SegmentBreakKind? currentKind = null;
+        var currentWordLike = false;
+        var builder = new StringBuilder();
+
+        void Flush()
+        {
+            if (builder.Length == 0 || currentKind is null)
+            {
+                return;
+            }
+
+            tokens.Add(new AnalysisToken(builder.ToString(), currentKind.Value, currentWordLike));
+            builder.Clear();
+            currentKind = null;
+            currentWordLike = false;
+        }
+
+        foreach (var element in EnumerateTextElements(text))
+        {
+            var kind = ClassifySegmentBreakTextElement(element, whiteSpaceProfile);
+            var isWordLike = kind == SegmentBreakKind.Text && IsWordLikeTextElement(element);
+
+            if (currentKind is not null && currentKind == kind && currentWordLike == isWordLike)
+            {
+                builder.Append(element);
+                continue;
+            }
+
+            Flush();
+            currentKind = kind;
+            currentWordLike = isWordLike;
+            builder.Append(element);
+        }
+
+        Flush();
+        return tokens;
+    }
+
+    private static List<AnalysisToken> BuildMergedTokens(
+        List<AnalysisToken> initialTokens,
+        EngineProfile profile,
+        WhiteSpaceProfile whiteSpaceProfile)
+    {
+        var merged = new List<AnalysisToken>(initialTokens.Count);
+
+        foreach (var token in initialTokens)
+        {
+            var isText = token.Kind == SegmentBreakKind.Text;
+            if (isText &&
+                merged.Count > 0 &&
+                merged[^1].Kind == SegmentBreakKind.Text &&
+                profile.CarryCjkAfterClosingQuote &&
+                ContainsCjk(token.Text) &&
+                ContainsCjk(merged[^1].Text) &&
+                EndsWithClosingQuote(merged[^1].Text))
+            {
+                var previous = merged[^1];
+                merged[^1] = previous with
+                {
+                    Text = previous.Text + token.Text,
+                    IsWordLike = previous.IsWordLike || token.IsWordLike,
+                };
+                continue;
+            }
+
+            if (isText &&
+                merged.Count > 0 &&
+                merged[^1].Kind == SegmentBreakKind.Text &&
+                IsCjkLineStartProhibitedSegment(token.Text) &&
+                ContainsCjk(merged[^1].Text))
+            {
+                var previous = merged[^1];
+                merged[^1] = previous with
+                {
+                    Text = previous.Text + token.Text,
+                    IsWordLike = previous.IsWordLike || token.IsWordLike,
+                };
+                continue;
+            }
+
+            if (isText &&
+                merged.Count > 0 &&
+                merged[^1].Kind == SegmentBreakKind.Text &&
+                EndsWithMyanmarMedialGlue(merged[^1].Text))
+            {
+                var previous = merged[^1];
+                merged[^1] = previous with
+                {
+                    Text = previous.Text + token.Text,
+                    IsWordLike = previous.IsWordLike || token.IsWordLike,
+                };
+                continue;
+            }
+
+            if (isText &&
+                merged.Count > 0 &&
+                merged[^1].Kind == SegmentBreakKind.Text &&
+                token.IsWordLike &&
+                ContainsArabicScript(token.Text) &&
+                EndsWithArabicNoSpacePunctuation(merged[^1].Text))
+            {
+                var previous = merged[^1];
+                merged[^1] = previous with
+                {
+                    Text = previous.Text + token.Text,
+                    IsWordLike = true,
+                };
+                continue;
+            }
+
+            if (isText &&
+                !token.IsWordLike &&
+                merged.Count > 0 &&
+                merged[^1].Kind == SegmentBreakKind.Text &&
+                token.Text.Length == 1 &&
+                token.Text != "-" &&
+                token.Text != "—" &&
+                IsRepeatedSingleCharRun(merged[^1].Text, token.Text[0]))
+            {
+                var previous = merged[^1];
+                merged[^1] = previous with { Text = previous.Text + token.Text };
+                continue;
+            }
+
+            if (isText &&
+                !token.IsWordLike &&
+                merged.Count > 0 &&
+                merged[^1].Kind == SegmentBreakKind.Text &&
+                (IsLeftStickyPunctuationSegment(token.Text) || (token.Text == "-" && merged[^1].IsWordLike)))
+            {
+                var previous = merged[^1];
+                merged[^1] = previous with
+                {
+                    Text = previous.Text + token.Text,
+                    IsWordLike = previous.IsWordLike || token.IsWordLike,
+                };
+                continue;
+            }
+
+            merged.Add(token);
+        }
+
+        for (var index = 1; index < merged.Count; index++)
+        {
+            if (merged[index].Kind == SegmentBreakKind.Text &&
+                !merged[index].IsWordLike &&
+                IsEscapedQuoteClusterSegment(merged[index].Text) &&
+                merged[index - 1].Kind == SegmentBreakKind.Text)
+            {
+                merged[index - 1] = merged[index - 1] with
+                {
+                    Text = merged[index - 1].Text + merged[index].Text,
+                    IsWordLike = merged[index - 1].IsWordLike || merged[index].IsWordLike,
+                };
+                merged[index] = merged[index] with { Text = string.Empty };
+            }
+        }
+
+        for (var index = merged.Count - 2; index >= 0; index--)
+        {
+            if (merged[index].Kind == SegmentBreakKind.Text &&
+                !merged[index].IsWordLike &&
+                IsForwardStickyClusterSegment(merged[index].Text))
+            {
+                var next = index + 1;
+                while (next < merged.Count && merged[next].Text.Length == 0)
+                {
+                    next++;
+                }
+
+                if (next < merged.Count && merged[next].Kind == SegmentBreakKind.Text)
+                {
+                    merged[next] = merged[next] with
+                    {
+                        Text = merged[index].Text + merged[next].Text,
+                        IsWordLike = merged[index].IsWordLike || merged[next].IsWordLike,
+                    };
+                    merged[index] = merged[index] with { Text = string.Empty };
+                }
+            }
+        }
+
+        merged = CompactTokens(merged);
+        merged = MergeGlueConnectedTextRuns(merged);
+        merged = MergeUrlLikeRuns(merged);
+        merged = MergeUrlQueryRuns(merged);
+        merged = MergeNumericRuns(merged);
+        merged = SplitHyphenatedNumericRuns(merged);
+        merged = MergeAsciiPunctuationChains(merged);
+        merged = CarryTrailingForwardStickyAcrossCjkBoundary(merged);
+
+        if (whiteSpaceProfile.PreserveOrdinarySpaces || whiteSpaceProfile.PreserveHardBreaks)
+        {
+            for (var index = 0; index < merged.Count - 1; index++)
+            {
+                var split = SplitLeadingSpaceAndMarks(merged[index].Text);
+                if (split is null)
+                {
+                    continue;
+                }
+
+                if ((merged[index].Kind != SegmentBreakKind.Space && merged[index].Kind != SegmentBreakKind.PreservedSpace) ||
+                    merged[index + 1].Kind != SegmentBreakKind.Text ||
+                    !ContainsArabicScript(merged[index + 1].Text))
+                {
+                    continue;
+                }
+
+                merged[index] = merged[index] with { Text = split.Value.Space };
+                merged[index + 1] = merged[index + 1] with { Text = split.Value.Marks + merged[index + 1].Text };
+            }
+        }
+
+        return CompactTokens(merged);
+    }
+
+    private static List<AnalysisToken> CompactTokens(List<AnalysisToken> tokens)
+    {
+        var compacted = new List<AnalysisToken>(tokens.Count);
+        foreach (var token in tokens)
+        {
+            if (token.Text.Length > 0)
+            {
+                compacted.Add(token);
+            }
+        }
+
+        return compacted;
+    }
+
+    private static List<AnalysisToken> MergeGlueConnectedTextRuns(List<AnalysisToken> tokens)
+    {
+        var merged = new List<AnalysisToken>(tokens.Count);
+        var read = 0;
+        while (read < tokens.Count)
+        {
+            var token = tokens[read];
+            if (token.Kind == SegmentBreakKind.Glue)
+            {
+                var glueText = token.Text;
+                read++;
+                while (read < tokens.Count && tokens[read].Kind == SegmentBreakKind.Glue)
+                {
+                    glueText += tokens[read].Text;
+                    read++;
+                }
+
+                if (read < tokens.Count && tokens[read].Kind == SegmentBreakKind.Text)
+                {
+                    var next = tokens[read];
+                    token = new AnalysisToken(glueText + next.Text, SegmentBreakKind.Text, next.IsWordLike);
+                    read++;
+                }
+                else
+                {
+                    merged.Add(new AnalysisToken(glueText, SegmentBreakKind.Glue, false));
+                    continue;
+                }
+            }
+            else
+            {
+                read++;
+            }
+
+            if (token.Kind == SegmentBreakKind.Text)
+            {
+                var text = token.Text;
+                var isWordLike = token.IsWordLike;
+                while (read < tokens.Count && tokens[read].Kind == SegmentBreakKind.Glue)
+                {
+                    var glueText = string.Empty;
+                    while (read < tokens.Count && tokens[read].Kind == SegmentBreakKind.Glue)
+                    {
+                        glueText += tokens[read].Text;
+                        read++;
+                    }
+
+                    if (read < tokens.Count && tokens[read].Kind == SegmentBreakKind.Text)
+                    {
+                        text += glueText + tokens[read].Text;
+                        isWordLike |= tokens[read].IsWordLike;
+                        read++;
+                        continue;
+                    }
+
+                    text += glueText;
+                }
+
+                merged.Add(new AnalysisToken(text, SegmentBreakKind.Text, isWordLike));
+                continue;
+            }
+
+            merged.Add(token);
+        }
+
+        return merged;
+    }
+
+    private static List<AnalysisToken> MergeUrlLikeRuns(List<AnalysisToken> tokens)
+    {
+        var merged = new List<AnalysisToken>(tokens.Count);
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (token.Kind == SegmentBreakKind.Text && IsUrlLikeRunStart(tokens, index))
+            {
+                var text = token.Text;
+                var next = index + 1;
+                while (next < tokens.Count && !IsTextRunBoundary(tokens[next].Kind))
+                {
+                    text += tokens[next].Text;
+                    var endsQueryPrefix = tokens[next].Text.Contains('?', StringComparison.Ordinal);
+                    next++;
+                    if (endsQueryPrefix)
+                    {
+                        break;
+                    }
+                }
+
+                merged.Add(new AnalysisToken(text, SegmentBreakKind.Text, true));
+                index = next - 1;
+                continue;
+            }
+
+            merged.Add(token);
+        }
+
+        return merged;
+    }
+
+    private static List<AnalysisToken> MergeUrlQueryRuns(List<AnalysisToken> tokens)
+    {
+        var merged = new List<AnalysisToken>(tokens.Count);
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            merged.Add(token);
+
+            if (!IsUrlQueryBoundaryToken(token.Text))
+            {
+                continue;
+            }
+
+            var next = index + 1;
+            if (next >= tokens.Count || IsTextRunBoundary(tokens[next].Kind))
+            {
+                continue;
+            }
+
+            var queryText = string.Empty;
+            var read = next;
+            while (read < tokens.Count && !IsTextRunBoundary(tokens[read].Kind))
+            {
+                queryText += tokens[read].Text;
+                read++;
+            }
+
+            if (queryText.Length > 0)
+            {
+                merged.Add(new AnalysisToken(queryText, SegmentBreakKind.Text, true));
+                index = read - 1;
+            }
+        }
+
+        return merged;
+    }
+
+    private static List<AnalysisToken> MergeNumericRuns(List<AnalysisToken> tokens)
+    {
+        var merged = new List<AnalysisToken>(tokens.Count);
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (token.Kind == SegmentBreakKind.Text && IsNumericRunSegment(token.Text) && SegmentContainsDecimalDigit(token.Text))
+            {
+                var text = token.Text;
+                var next = index + 1;
+                while (next < tokens.Count &&
+                       tokens[next].Kind == SegmentBreakKind.Text &&
+                       IsNumericRunSegment(tokens[next].Text))
+                {
+                    text += tokens[next].Text;
+                    next++;
+                }
+
+                merged.Add(new AnalysisToken(text, SegmentBreakKind.Text, true));
+                index = next - 1;
+                continue;
+            }
+
+            merged.Add(token);
+        }
+
+        return merged;
+    }
+
+    private static List<AnalysisToken> SplitHyphenatedNumericRuns(List<AnalysisToken> tokens)
+    {
+        var splitTokens = new List<AnalysisToken>(tokens.Count);
+        foreach (var token in tokens)
+        {
+            if (token.Kind == SegmentBreakKind.Text && token.Text.Contains('-', StringComparison.Ordinal))
+            {
+                var parts = token.Text.Split('-', StringSplitOptions.None);
+                var shouldSplit = parts.Length > 1;
+                foreach (var part in parts)
+                {
+                    if (!shouldSplit)
+                    {
+                        break;
+                    }
+
+                    if (part.Length == 0 || !SegmentContainsDecimalDigit(part) || !IsNumericRunSegment(part))
+                    {
+                        shouldSplit = false;
+                    }
+                }
+
+                if (shouldSplit)
+                {
+                    for (var index = 0; index < parts.Length; index++)
+                    {
+                        var splitText = index < parts.Length - 1 ? $"{parts[index]}-" : parts[index];
+                        splitTokens.Add(new AnalysisToken(splitText, SegmentBreakKind.Text, true));
+                    }
+
+                    continue;
+                }
+            }
+
+            splitTokens.Add(token);
+        }
+
+        return splitTokens;
+    }
+
+    private static List<AnalysisToken> MergeAsciiPunctuationChains(List<AnalysisToken> tokens)
+    {
+        var merged = new List<AnalysisToken>(tokens.Count);
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (token.Kind == SegmentBreakKind.Text &&
+                token.IsWordLike &&
+                IsAsciiPunctuationChainSegment(token.Text))
+            {
+                var text = token.Text;
+                var next = index + 1;
+                while (HasAsciiPunctuationChainTrailingJoiners(text) &&
+                       next < tokens.Count &&
+                       tokens[next].Kind == SegmentBreakKind.Text &&
+                       tokens[next].IsWordLike &&
+                       IsAsciiPunctuationChainSegment(tokens[next].Text))
+                {
+                    text += tokens[next].Text;
+                    next++;
+                }
+
+                merged.Add(new AnalysisToken(text, SegmentBreakKind.Text, true));
+                index = next - 1;
+                continue;
+            }
+
+            merged.Add(token);
+        }
+
+        return merged;
+    }
+
+    private static List<AnalysisToken> CarryTrailingForwardStickyAcrossCjkBoundary(List<AnalysisToken> tokens)
+    {
+        var carried = tokens.ToList();
+        for (var index = 0; index < carried.Count - 1; index++)
+        {
+            if (carried[index].Kind != SegmentBreakKind.Text ||
+                carried[index + 1].Kind != SegmentBreakKind.Text ||
+                !ContainsCjk(carried[index].Text) ||
+                !ContainsCjk(carried[index + 1].Text))
+            {
+                continue;
+            }
+
+            var split = SplitTrailingForwardStickyCluster(carried[index].Text);
+            if (split is null)
+            {
+                continue;
+            }
+
+            carried[index] = carried[index] with { Text = split.Value.Head };
+            carried[index + 1] = carried[index + 1] with { Text = split.Value.Tail + carried[index + 1].Text };
+        }
+
+        return CompactTokens(carried);
+    }
+
+    private static SegmentBreakKind ClassifySegmentBreakTextElement(string element, WhiteSpaceProfile whiteSpaceProfile)
+    {
+        if (whiteSpaceProfile.PreserveOrdinarySpaces || whiteSpaceProfile.PreserveHardBreaks)
+        {
+            if (element == " ")
+            {
+                return SegmentBreakKind.PreservedSpace;
+            }
+
+            if (element == "\t")
+            {
+                return SegmentBreakKind.Tab;
+            }
+
+            if (whiteSpaceProfile.PreserveHardBreaks && element == "\n")
+            {
+                return SegmentBreakKind.HardBreak;
+            }
+        }
+
+        if (element == " ")
+        {
+            return SegmentBreakKind.Space;
+        }
+
+        if (element is "\u00A0" or "\u202F" or "\u2060" or "\uFEFF")
+        {
+            return SegmentBreakKind.Glue;
+        }
+
+        if (element == "\u200B")
+        {
+            return SegmentBreakKind.ZeroWidthBreak;
+        }
+
+        if (element == "\u00AD")
+        {
+            return SegmentBreakKind.SoftHyphen;
+        }
+
+        return SegmentBreakKind.Text;
+    }
+
+    private static bool IsWordLikeTextElement(string element)
+    {
+        var sawWord = false;
+        foreach (var rune in element.EnumerateRunes())
+        {
+            var category = Rune.GetUnicodeCategory(rune);
+            if (category is UnicodeCategory.UppercaseLetter or
+                UnicodeCategory.LowercaseLetter or
+                UnicodeCategory.TitlecaseLetter or
+                UnicodeCategory.ModifierLetter or
+                UnicodeCategory.OtherLetter or
+                UnicodeCategory.DecimalDigitNumber or
+                UnicodeCategory.LetterNumber or
+                UnicodeCategory.OtherNumber or
+                UnicodeCategory.NonSpacingMark or
+                UnicodeCategory.SpacingCombiningMark or
+                UnicodeCategory.EnclosingMark)
+            {
+                sawWord = true;
+                continue;
+            }
+
+            if (category == UnicodeCategory.ConnectorPunctuation || rune.Value == '_')
+            {
+                sawWord = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return sawWord;
+    }
+
+    private static IEnumerable<string> EnumerateTextElements(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            yield break;
+        }
+
+        var enumerator = StringInfo.GetTextElementEnumerator(text);
+        while (enumerator.MoveNext())
+        {
+            yield return (string)enumerator.Current!;
+        }
+    }
+
+    private static bool IsTextRunBoundary(SegmentBreakKind kind)
+    {
+        return kind is SegmentBreakKind.Space or SegmentBreakKind.PreservedSpace or SegmentBreakKind.ZeroWidthBreak or SegmentBreakKind.HardBreak;
+    }
+
+    private static bool IsUrlLikeRunStart(IReadOnlyList<AnalysisToken> tokens, int index)
+    {
+        var text = tokens[index].Text;
+        if (text.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return UrlSchemeSegmentRegex.IsMatch(text) &&
+               index + 1 < tokens.Count &&
+               tokens[index + 1].Kind == SegmentBreakKind.Text &&
+               tokens[index + 1].Text == "//";
+    }
+
+    private static bool IsUrlQueryBoundaryToken(string text)
+    {
+        return text.Contains('?', StringComparison.Ordinal) &&
+               (text.Contains("://", StringComparison.Ordinal) || text.StartsWith("www.", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool SegmentContainsDecimalDigit(string text)
+    {
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (Rune.GetUnicodeCategory(rune) == UnicodeCategory.DecimalDigitNumber)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsNumericRunSegment(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (Rune.GetUnicodeCategory(rune) == UnicodeCategory.DecimalDigitNumber ||
+                NumericJoiners.Contains((char)rune.Value))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsAsciiPunctuationChainSegment(string text)
+    {
+        if (text.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var ch in text)
+        {
+            if ((ch >= 'A' && ch <= 'Z') ||
+                (ch >= 'a' && ch <= 'z') ||
+                (ch >= '0' && ch <= '9') ||
+                ch == '_' ||
+                ch is ',' or ':' or ';')
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasAsciiPunctuationChainTrailingJoiners(string text)
+    {
+        if (text.Length == 0)
+        {
+            return false;
+        }
+
+        var index = text.Length - 1;
+        var sawJoiner = false;
+        while (index >= 0)
+        {
+            var ch = text[index];
+            if (ch is ',' or ':' or ';')
+            {
+                sawJoiner = true;
+                index--;
+                continue;
+            }
+
+            break;
+        }
+
+        return sawJoiner;
+    }
+
+    private static bool ContainsArabicScript(string text)
+    {
+        foreach (var rune in text.EnumerateRunes())
+        {
+            var code = rune.Value;
+            if ((code >= 0x0600 && code <= 0x06FF) ||
+                (code >= 0x0750 && code <= 0x077F) ||
+                (code >= 0x08A0 && code <= 0x08FF) ||
+                (code >= 0xFB50 && code <= 0xFDFF) ||
+                (code >= 0xFE70 && code <= 0xFEFF) ||
+                (code >= 0x10E60 && code <= 0x10E7F) ||
+                (code >= 0x1EE00 && code <= 0x1EEFF))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsCombiningMark(char ch)
+    {
+        var category = CharUnicodeInfo.GetUnicodeCategory(ch);
+        return category is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
+    }
+
+    private static bool IsEscapedQuoteClusterSegment(string segment)
+    {
+        var sawQuote = false;
+        foreach (var ch in segment)
+        {
+            if (ch == '\\' || IsCombiningMark(ch))
+            {
+                continue;
+            }
+
+            if (KinsokuEnd.Contains(ch.ToString()) || LeftStickyPunctuation.Contains(ch.ToString()) || ForwardStickyGlue.Contains(ch))
+            {
+                sawQuote = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return sawQuote;
+    }
+
+    private static bool IsLeftStickyPunctuationSegment(string segment)
+    {
+        if (IsEscapedQuoteClusterSegment(segment))
+        {
+            return true;
+        }
+
+        var sawPunctuation = false;
+        foreach (var ch in segment)
+        {
+            if (LeftStickyPunctuation.Contains(ch.ToString()))
+            {
+                sawPunctuation = true;
+                continue;
+            }
+
+            if (sawPunctuation && IsCombiningMark(ch))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return sawPunctuation;
+    }
+
+    private static bool IsCjkLineStartProhibitedSegment(string segment)
+    {
+        if (segment.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var ch in segment)
+        {
+            var glyph = ch.ToString();
+            if (!KinsokuStart.Contains(glyph) && !LeftStickyPunctuation.Contains(glyph))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsForwardStickyClusterSegment(string segment)
+    {
+        if (IsEscapedQuoteClusterSegment(segment))
+        {
+            return true;
+        }
+
+        if (segment.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var ch in segment)
+        {
+            if (KinsokuEnd.Contains(ch.ToString()) || ForwardStickyGlue.Contains(ch) || IsCombiningMark(ch))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsRepeatedSingleCharRun(string segment, char ch)
+    {
+        if (segment.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var part in segment)
+        {
+            if (part != ch)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool EndsWithArabicNoSpacePunctuation(string segment)
+    {
+        return segment.Length > 0 &&
+               ContainsArabicScript(segment) &&
+               ArabicNoSpaceTrailingPunctuation.Contains(segment[^1]);
+    }
+
+    private static bool EndsWithMyanmarMedialGlue(string segment)
+    {
+        return segment.Length > 0 && MyanmarMedialGlue.Contains(segment[^1]);
+    }
+
+    private static (string Space, string Marks)? SplitLeadingSpaceAndMarks(string segment)
+    {
+        if (segment.Length < 2 || segment[0] != ' ')
+        {
+            return null;
+        }
+
+        for (var index = 1; index < segment.Length; index++)
+        {
+            if (!IsCombiningMark(segment[index]))
+            {
+                return null;
+            }
+        }
+
+        return (" ", segment[1..]);
+    }
+
+    private static (string Head, string Tail)? SplitTrailingForwardStickyCluster(string text)
+    {
+        var splitIndex = text.Length;
+        while (splitIndex > 0)
+        {
+            var ch = text[splitIndex - 1];
+            if (IsCombiningMark(ch))
+            {
+                splitIndex--;
+                continue;
+            }
+
+            if (KinsokuEnd.Contains(ch.ToString()) || ForwardStickyGlue.Contains(ch))
+            {
+                splitIndex--;
+                continue;
+            }
+
+            break;
+        }
+
+        if (splitIndex <= 0 || splitIndex == text.Length)
+        {
+            return null;
+        }
+
+        return (text[..splitIndex], text[splitIndex..]);
+    }
+}
