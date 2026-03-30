@@ -19,7 +19,13 @@ bun run accuracy-snapshot:firefox
 bun run benchmark-check      # Chrome benchmark snapshot
 bun run benchmark-check:safari
 bun run pre-wrap-check       # small browser-oracle sweep for { whiteSpace: 'pre-wrap' }
+bun run corpus-check         # diagnose one corpus at one or a few widths
+bun run corpus-sweep         # coarse corpus width sweep
+bun run corpus-font-matrix   # same corpus under alternate fonts
+bun run corpus-taxonomy      # classify a corpus mismatch field into steering buckets
 bun run corpus-representative
+bun run gatsby-check         # slow detailed Gatsby diagnosis
+bun run gatsby-sweep         # coarse Gatsby width sweep
 ```
 
 Packaging notes:
@@ -32,6 +38,7 @@ Useful pages:
 - `/demos/accordion`
 - `/demos/bubbles`
 - `/demos/dynamic-layout`
+- `/demos/justification-comparison`
 - `/accuracy`
 - `/benchmark`
 - `/corpus`

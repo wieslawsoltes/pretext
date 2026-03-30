@@ -80,6 +80,23 @@ type PositionedLine = {
   text: string
 }
 
+type ProjectedBodyLine = PositionedLine & {
+  className: string
+}
+
+type TextProjection = {
+  pageWidth: number
+  pageHeight: number
+  headlineFont: string
+  headlineLineHeight: number
+  headlineLines: PositionedLine[]
+  creditLeft: number
+  creditTop: number
+  bodyFont: string
+  bodyLineHeight: number
+  bodyLines: ProjectedBodyLine[]
+}
+
 type BandObstacle =
   | {
       kind: 'polygon'
@@ -130,8 +147,8 @@ type DomCache = {
   credit: HTMLParagraphElement // cache lifetime: page
   openaiLogo: HTMLImageElement // cache lifetime: page
   claudeLogo: HTMLImageElement // cache lifetime: page
-  headlineLines: HTMLDivElement[] // cache lifetime: headline line count
-  bodyLines: HTMLDivElement[] // cache lifetime: visible line count
+  headlineLines: HTMLSpanElement[] // cache lifetime: headline line count
+  bodyLines: HTMLSpanElement[] // cache lifetime: visible line count
 }
 
 const preparedByKey = new Map<string, PreparedTextWithSegments>()
@@ -144,6 +161,7 @@ const events: { mousemove: MouseEvent | null; click: MouseEvent | null; blur: bo
 const pointer = { x: -Infinity, y: -Infinity }
 let currentLogoHits!: LogoHits
 let hoveredLogo: LogoKind | null = null
+let committedTextProjection: TextProjection | null = null
 const logoAnimations: { openai: LogoAnimationState; claude: LogoAnimationState } = {
   openai: { angle: 0, spin: null },
   claude: { angle: 0, spin: null },
@@ -336,7 +354,7 @@ function syncPool<T extends HTMLElement>(pool: T[], length: number, create: () =
 
 function projectHeadlineLines(lines: PositionedLine[], font: string, lineHeight: number): void {
   syncPool(domCache.headlineLines, lines.length, () => {
-    const element = document.createElement('div')
+    const element = document.createElement('span')
     element.className = 'headline-line'
     return element
   }, domCache.headline)
@@ -352,23 +370,8 @@ function projectHeadlineLines(lines: PositionedLine[], font: string, lineHeight:
   }
 }
 
-function projectBodyLines(lines: PositionedLine[], className: string, font: string, lineHeight: number, startIndex: number): number {
-  for (let offset = 0; offset < lines.length; offset++) {
-    const line = lines[offset]!
-    const element = domCache.bodyLines[startIndex + offset]!
-    element.className = className
-    element.textContent = line.text
-    element.title = ''
-    element.style.left = `${line.x}px`
-    element.style.top = `${line.y}px`
-    element.style.font = font
-    element.style.lineHeight = `${lineHeight}px`
-  }
-  return startIndex + lines.length
-}
-
-function projectStaticLayout(layout: PageLayout, contentHeight: number): void {
-  domCache.page.classList.toggle('page--mobile', layout.isNarrow)
+function projectChromeLayout(layout: PageLayout, contentHeight: number): void {
+  domCache.page.className = layout.isNarrow ? 'page page--mobile' : 'page'
   stage.style.height = `${contentHeight}px`
 
   domCache.openaiLogo.style.left = `${layout.openaiRect.x}px`
@@ -382,20 +385,89 @@ function projectStaticLayout(layout: PageLayout, contentHeight: number): void {
   domCache.claudeLogo.style.width = `${layout.claudeRect.width}px`
   domCache.claudeLogo.style.height = `${layout.claudeRect.height}px`
   domCache.claudeLogo.style.transform = `rotate(${logoAnimations.claude.angle}rad)`
-  domCache.claudeLogo.style.display = 'block'
+}
 
+function positionedLinesEqual(a: PositionedLine[], b: PositionedLine[]): boolean {
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index++) {
+    const left = a[index]!
+    const right = b[index]!
+    if (
+      left.x !== right.x ||
+      left.y !== right.y ||
+      left.width !== right.width ||
+      left.text !== right.text
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+function projectedBodyLinesEqual(a: ProjectedBodyLine[], b: ProjectedBodyLine[]): boolean {
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index++) {
+    const left = a[index]!
+    const right = b[index]!
+    if (
+      left.className !== right.className ||
+      left.x !== right.x ||
+      left.y !== right.y ||
+      left.width !== right.width ||
+      left.text !== right.text
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+function textProjectionEqual(a: TextProjection | null, b: TextProjection): boolean {
+  return a !== null &&
+    a.pageWidth === b.pageWidth &&
+    a.pageHeight === b.pageHeight &&
+    a.headlineFont === b.headlineFont &&
+    a.headlineLineHeight === b.headlineLineHeight &&
+    a.creditLeft === b.creditLeft &&
+    a.creditTop === b.creditTop &&
+    a.bodyFont === b.bodyFont &&
+    a.bodyLineHeight === b.bodyLineHeight &&
+    positionedLinesEqual(a.headlineLines, b.headlineLines) &&
+    projectedBodyLinesEqual(a.bodyLines, b.bodyLines)
+}
+
+function projectTextProjection(projection: TextProjection): void {
   domCache.headline.style.left = '0px'
   domCache.headline.style.top = '0px'
-  domCache.headline.style.width = `${layout.pageWidth}px`
-  domCache.headline.style.height = `${layout.pageHeight}px`
-  domCache.headline.style.font = layout.headlineFont
-  domCache.headline.style.lineHeight = `${layout.headlineLineHeight}px`
+  domCache.headline.style.width = `${projection.pageWidth}px`
+  domCache.headline.style.height = `${projection.pageHeight}px`
+  domCache.headline.style.font = projection.headlineFont
+  domCache.headline.style.lineHeight = `${projection.headlineLineHeight}px`
   domCache.headline.style.letterSpacing = '0px'
-  domCache.credit.style.left = `${layout.gutter + 4}px`
-  domCache.credit.style.top = '0px'
+
+  projectHeadlineLines(projection.headlineLines, projection.headlineFont, projection.headlineLineHeight)
+
+  domCache.credit.style.left = `${projection.creditLeft}px`
+  domCache.credit.style.top = `${projection.creditTop}px`
   domCache.credit.style.width = 'auto'
   domCache.credit.style.font = CREDIT_FONT
   domCache.credit.style.lineHeight = `${CREDIT_LINE_HEIGHT}px`
+
+  syncPool(domCache.bodyLines, projection.bodyLines.length, () => {
+    const element = document.createElement('span')
+    element.className = 'line'
+    return element
+  })
+  for (let index = 0; index < projection.bodyLines.length; index++) {
+    const line = projection.bodyLines[index]!
+    const element = domCache.bodyLines[index]!
+    element.className = line.className
+    element.textContent = line.text
+    element.style.left = `${line.x}px`
+    element.style.top = `${line.y}px`
+    element.style.font = projection.bodyFont
+    element.style.lineHeight = `${projection.bodyLineHeight}px`
+  }
 }
 
 function fitHeadlineFontSize(headlineWidth: number, pageWidth: number): number {
@@ -748,18 +820,30 @@ function commitFrame(now: number): boolean {
 
   currentLogoHits = hits
 
-  projectStaticLayout(layout, contentHeight)
-  projectHeadlineLines(headlineLines, layout.headlineFont, layout.headlineLineHeight)
-  domCache.credit.style.left = `${creditLeft}px`
-  domCache.credit.style.top = `${creditTop}px`
-  syncPool(domCache.bodyLines, leftLines.length + rightLines.length, () => {
-    const element = document.createElement('div')
-    element.className = 'line'
-    return element
-  })
-  let nextIndex = 0
-  nextIndex = projectBodyLines(leftLines, 'line line--left', font, lineHeight, nextIndex)
-  projectBodyLines(rightLines, 'line line--right', font, lineHeight, nextIndex)
+  projectChromeLayout(layout, contentHeight)
+
+  const bodyLines: ProjectedBodyLine[] = [
+    ...leftLines.map(line => ({ ...line, className: 'line line--left' })),
+    ...rightLines.map(line => ({ ...line, className: 'line line--right' })),
+  ]
+  const textProjection: TextProjection = {
+    pageWidth: layout.pageWidth,
+    pageHeight: layout.pageHeight,
+    headlineFont: layout.headlineFont,
+    headlineLineHeight: layout.headlineLineHeight,
+    headlineLines,
+    creditLeft,
+    creditTop,
+    bodyFont: font,
+    bodyLineHeight: lineHeight,
+    bodyLines,
+  }
+
+  if (!textProjectionEqual(committedTextProjection, textProjection)) {
+    projectTextProjection(textProjection)
+    committedTextProjection = textProjection
+  }
+
   document.body.style.cursor = hoveredLogo === null ? '' : 'pointer'
 
   return animating
