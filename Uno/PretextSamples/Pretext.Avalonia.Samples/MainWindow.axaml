@@ -1,0 +1,143 @@
+<Window
+    x:Class="Pretext.Avalonia.Samples.MainWindow"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Pretext.Avalonia.Samples"
+    Title="Pretext Avalonia Samples"
+    Width="1520"
+    Height="940"
+    MinWidth="1220"
+    MinHeight="760"
+    Background="#F7F2EA">
+  <Grid RowDefinitions="Auto,*" ColumnDefinitions="260,*,320">
+    <Border Grid.Row="0"
+            Grid.ColumnSpan="3"
+            Background="#241D16"
+            Padding="24,18"
+            BorderBrush="#3B3228"
+            BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+        <TextBlock x:Name="WindowTitleText"
+                   FontSize="30"
+                   FontWeight="Bold"
+                   Foreground="#F9F4EC"
+                   Text="Pretext for Avalonia" />
+        <TextBlock Grid.Row="1"
+                   Margin="0,8,0,0"
+                   MaxWidth="980"
+                   FontSize="15"
+                   TextWrapping="Wrap"
+                   Foreground="#D8C8B6"
+                   Text="A desktop sample browser that uses the shared Pretext two-pass framework layer, Avalonia control adapters, and live diagnostics to inspect prepared-layout reuse, viewport-aware realization, and responsive shells." />
+        <Border Grid.Column="1"
+                Grid.RowSpan="2"
+                Padding="14,10"
+                CornerRadius="18"
+                Background="#3B3228"
+                BorderBrush="#4D4034"
+                BorderThickness="1">
+          <TextBlock VerticalAlignment="Center"
+                     FontFamily="Consolas"
+                     FontSize="12"
+                     Foreground="#F5EBDD"
+                     Text="Resize, scroll, and inspect diagnostics live" />
+        </Border>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1"
+            Grid.Column="0"
+            Margin="18"
+            Padding="16"
+            Background="#FFFDF9"
+            BorderBrush="#D8C9B9"
+            BorderThickness="1"
+            CornerRadius="22">
+      <Grid RowDefinitions="Auto,*">
+        <TextBlock Text="Samples"
+                   FontSize="18"
+                   FontWeight="SemiBold"
+                   Foreground="#241D16" />
+        <ListBox x:Name="SampleList"
+                 Grid.Row="1"
+                 Margin="0,14,0,0"
+                 BorderThickness="0"
+                 Background="Transparent"
+                 SelectionChanged="OnSampleSelectionChanged">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="local:SampleDescriptor">
+              <Border Padding="12,10" CornerRadius="16">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="#241D16" />
+                  <TextBlock Text="{Binding ShortDescription}" FontSize="12" TextWrapping="Wrap" Foreground="#6B6258" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1"
+            Grid.Column="1"
+            Margin="0,18,18,18"
+            Padding="22"
+            Background="#FFFDF9"
+            BorderBrush="#D8C9B9"
+            BorderThickness="1"
+            CornerRadius="24">
+      <Grid RowDefinitions="Auto,Auto,*">
+        <TextBlock x:Name="SampleTitleText"
+                   FontSize="28"
+                   FontWeight="Bold"
+                   Foreground="#241D16" />
+        <TextBlock x:Name="SampleDescriptionText"
+                   Grid.Row="1"
+                   Margin="0,10,0,0"
+                   MaxWidth="860"
+                   FontSize="15"
+                   TextWrapping="Wrap"
+                   Foreground="#6B6258" />
+        <Grid Grid.Row="2"
+              Margin="0,22,0,0">
+          <ScrollViewer x:Name="SampleScrollViewer"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <ContentControl x:Name="SampleScrollHost" />
+          </ScrollViewer>
+          <ContentControl x:Name="SampleDirectHost"
+                          IsVisible="False" />
+        </Grid>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1"
+            Grid.Column="2"
+            Margin="0,18,18,18"
+            Padding="18"
+            Background="#F9F3EA"
+            BorderBrush="#D8C9B9"
+            BorderThickness="1"
+            CornerRadius="22">
+      <Grid RowDefinitions="Auto,Auto,*">
+        <TextBlock Text="Diagnostics"
+                   FontSize="18"
+                   FontWeight="SemiBold"
+                   Foreground="#241D16" />
+        <TextBlock Grid.Row="1"
+                   Margin="0,8,0,0"
+                   FontSize="12"
+                   TextWrapping="Wrap"
+                   Foreground="#6B6258"
+                   Text="Prepare, solve, viewport, and realization counters update from the active Pretext control or virtualizing surface." />
+        <ScrollViewer Grid.Row="2" Margin="0,14,0,0">
+          <TextBlock x:Name="DiagnosticsText"
+                     FontFamily="Consolas"
+                     FontSize="12"
+                     TextWrapping="Wrap"
+                     Foreground="#2D271F" />
+        </ScrollViewer>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
