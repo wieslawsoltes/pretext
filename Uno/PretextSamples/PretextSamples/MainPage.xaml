@@ -16,6 +16,8 @@
         <NavigationViewItem Content="Accordion" Tag="accordion" Icon="Bullets" />
         <NavigationViewItem Content="Bubbles" Tag="bubbles" Icon="Comment" />
         <NavigationViewItem Content="Masonry" Tag="masonry" Icon="Library" />
+        <NavigationViewItem Content="Virtual Wrap" Tag="virtual-wrap" Icon="Library" />
+        <NavigationViewItem Content="Virtual List" Tag="virtual-list" Icon="Bullets" />
         <NavigationViewItem Content="Rich Text" Tag="rich" Icon="Document" />
         <NavigationViewItem Content="Dynamic Layout" Tag="dynamic" Icon="Pictures" />
         <NavigationViewItem Content="Editorial Engine" Tag="editorial" Icon="Play" />

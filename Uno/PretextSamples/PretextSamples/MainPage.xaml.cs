@@ -11,6 +11,8 @@ public sealed partial class MainPage : Page
         ["accordion"] = static () => new AccordionSampleView(),
         ["bubbles"] = static () => new BubblesSampleView(),
         ["masonry"] = static () => new MasonrySampleView(),
+        ["virtual-wrap"] = static () => new VirtualWrapTilesSampleView(),
+        ["virtual-list"] = static () => new VirtualListTilesSampleView(),
         ["rich"] = static () => new RichNoteSampleView(),
         ["dynamic"] = static () => new DynamicLayoutSampleView(),
         ["editorial"] = static () => new EditorialEngineSampleView(),
