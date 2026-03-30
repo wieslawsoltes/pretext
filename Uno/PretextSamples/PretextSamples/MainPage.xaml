@@ -18,6 +18,9 @@
         <NavigationViewItem Content="Masonry" Tag="masonry" Icon="Library" />
         <NavigationViewItem Content="Virtual Wrap" Tag="virtual-wrap" Icon="Library" />
         <NavigationViewItem Content="Virtual List" Tag="virtual-list" Icon="Bullets" />
+        <NavigationViewItem Content="Todo App" Tag="todo-app" Icon="Bullets" />
+        <NavigationViewItem Content="Mail App" Tag="mail-app" Icon="Mail" />
+        <NavigationViewItem Content="Notes App" Tag="notes-app" Icon="Edit" />
         <NavigationViewItem Content="Rich Text" Tag="rich" Icon="Document" />
         <NavigationViewItem Content="Dynamic Layout" Tag="dynamic" Icon="Pictures" />
         <NavigationViewItem Content="Editorial Engine" Tag="editorial" Icon="Play" />

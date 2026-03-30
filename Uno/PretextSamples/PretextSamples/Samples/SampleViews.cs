@@ -36,6 +36,9 @@ public sealed class OverviewSampleView : UserControl
         cards.Children.Add(BuildFeatureCard("Masonry", "Card heights come from the layout engine, so the grid can place content before the UI tree measures it."));
         cards.Children.Add(BuildFeatureCard("Virtual Wrap", "A custom 100k-item wrap surface computes every tile box up front, then culls whole rows against the viewport."));
         cards.Children.Add(BuildFeatureCard("Virtual List", "A ListBox-like 100k feed keeps exact non-uniform row heights without ItemsRepeater, ListView, or measured placeholders."));
+        cards.Children.Add(BuildFeatureCard("Todo App", "Built-in Uno controls are absolutely positioned into wide, medium, and narrow task-planning shells, while Pretext drives every variable text region."));
+        cards.Children.Add(BuildFeatureCard("Mail App", "A responsive inbox surface reflows folders, message rows, and the reader pane with explicit panel rects instead of adaptive Grid heuristics."));
+        cards.Children.Add(BuildFeatureCard("Notes App", "A note workspace swaps between stacked, split, and three-pane arrangements while Pretext keeps cards and editor previews geometrically exact."));
         cards.Children.Add(BuildFeatureCard("Rich Text", "Inline text, code spans, and atomic chips share one flow while only the text fragments split across lines."));
         cards.Children.Add(BuildFeatureCard("Dynamic Layout", "Two-column text routes around badges and a headline box by asking the engine for one line at a time."));
         cards.Children.Add(BuildFeatureCard("Editorial Engine", "Animated circular obstacles and a pull quote force live reflow in a magazine-style stage."));
