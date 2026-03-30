@@ -1,90 +1,123 @@
-# Pretext-Style Two-Pass Layout Analysis for Uno and Avalonia
+# Pretext-Style Two-Pass Layout Framework Analysis
 
-Status: draft design analysis  
+Status: working design analysis  
 Audience: framework contributors, control authors, application architects  
-Scope: how the prepare-and-cache ideas used by Pretext can be generalized into a two-pass layout system for custom panels, custom controls, responsive shells, and virtualized text-heavy UI in Uno and Avalonia
+Scope: how the prepare-and-cache ideas used by Pretext can be generalized into a reusable two-pass layout architecture, then integrated cleanly into Avalonia and Uno for custom panels, custom controls, responsive shells, and virtualized UI
 
 This document extends:
 
 - `Uno/PRETEXT_TECHNICAL_SPEC.md`
 - `Uno/PRETEXT_UNO_UI_SYSTEM_SPEC.md`
 
-Those documents explain the current Pretext engine and the current Uno integration. This document focuses on a broader architectural question:
+Those documents describe the current Pretext engine and the current Uno sample integration. This document is broader. It asks:
 
-can the same kind of parsing, caching, and staged layout that Pretext uses for text be used to build reusable panel layouts and control layouts in Uno or Avalonia?
+can the same parsing, caching, and staged solving strategy be lifted out of text layout and turned into a general framework for UI layout?
 
-The answer is yes. In fact, both frameworks already contain the right lifecycle shape for it.
+The answer is yes, but only if the system is treated as a framework architecture rather than a one-off panel optimization.
 
 ## 1. Executive Summary
 
-Pretext works because it splits layout into two different kinds of work:
+Pretext is valuable because it separates two kinds of work:
 
-1. expensive semantic preparation
+1. semantic preparation
 2. cheap repeated geometric solving
 
-For text, the semantic preparation phase includes:
+In the text engine, `prepare()` does the expensive semantic work once:
 
 - normalization
 - segmentation
-- script-specific break fixes
+- script-aware preprocessing
 - measurement caching
-- chunk metadata
+- chunk metadata creation
 
-The repeated solve phase then answers:
+Then `layout()` and `layoutNextLine()` repeatedly solve geometry without redoing that semantic work.
 
-- how many lines fit?
-- what is the height?
-- where does each line begin and end?
+The same pattern applies to UI layout:
 
-The same pattern can be generalized to UI layout:
+1. parse UI inputs into stable prepared nodes
+2. cache the prepared representation behind a layout fingerprint
+3. solve geometry for width, height, viewport, and state
+4. realize or arrange live controls from solved geometry
 
-1. parse controls or items into layout tokens and intrinsic metrics
-2. cache the prepared representation
-3. solve geometry repeatedly for different available sizes
-4. arrange live controls from the solved geometry
+The important shift is this:
 
-That gives a two-pass layout system:
+the framework should not discover layout by repeatedly asking live controls what they want when the meaning of the layout has not changed.
 
-- pass A: semantic prepare pass
-- pass B: geometric solve pass
+Instead, it should:
 
-inside the normal framework measure/arrange lifecycle.
+- prepare once when semantic inputs change
+- solve many times when only geometric constraints change
 
-This is feasible in both:
+That is the core of a Pretext-style two-pass UI architecture.
 
-- Uno, through `MeasureOverride`, `ArrangeOverride`, `LayoutPanel`, and `ItemsRepeater` / `VirtualizingLayout`
-- Avalonia, through `MeasureOverride`, `ArrangeOverride`, `Panel`, `VirtualizingPanel`, `LayoutManager`, and `EffectiveViewportChanged`
+## 2. What Pretext Is Really Teaching
 
-## 2. Why Pretext’s Architecture Generalizes Beyond Text
+Pretext is not only a text layout library. It is a concrete proof that a UI engine can be fast when it obeys four rules:
 
-### 2.1 What Pretext is really doing
+### 2.1 Separate semantic and geometric work
 
-At a deeper level, Pretext is not “just a text layout engine”. It is an example of a more general architecture:
+Semantic work includes:
 
-- content is transformed into a stable prepared model
-- expensive derivations are cached
-- width-dependent solves do not repeat semantic work
-- rendering consumes solved geometry rather than discovering it late
+- parsing content
+- grouping tokens
+- building derived metadata
+- measuring intrinsic units
+- classifying break opportunities
 
-The text case happens to be:
+Geometric work includes:
 
-- tokens are segments and graphemes
-- constraints are width and line height
-- outputs are line ranges and heights
+- choosing widths
+- selecting rows or columns
+- assigning rectangles
+- computing extents
+- deriving visible ranges
 
-The same idea can be applied to panel layout:
+### 2.2 Cache prepared state behind stable fingerprints
 
-- tokens are children, content groups, chrome sections, or item templates
-- constraints are width, height, mode, viewport, and spacing rules
-- outputs are child rectangles, extents, and virtualization ranges
+If text, font, or break policy does not change, the prepared model should survive many width changes.
 
-### 2.2 The key abstraction
+The same applies to UI:
 
-The key abstraction is:
+- if item content does not change, the prepared item model should survive resize
+- if control chrome does not change, the prepared control structure should survive state toggles
+- if a responsive shell only changes column widths, the app should not rebuild all content semantics
 
-`PreparedLayoutModel + Solve(constraints) -> LayoutGeometry`
+### 2.3 Keep the solve phase arithmetic-first
 
-For text:
+Pretext hot paths avoid:
+
+- UI-tree reads
+- fresh measurement
+- string reconstruction
+- avoidable allocations
+
+A generalized layout solver should do the same:
+
+- work from prepared metrics and constraints
+- avoid inspecting live children during hot resize or scroll
+- emit geometry, not ask the tree what geometry should be
+
+### 2.4 Treat realization as a separate concern
+
+Pretext can answer geometry without materializing line text for every consumer.
+
+Likewise, a UI system should be able to:
+
+- compute rectangles for 100k items
+- realize only the visible slice
+- keep total extent independent from realized element count
+
+## 3. Core Framework Model
+
+This section is framework-neutral. It is the reusable architecture that Avalonia and Uno should both map onto.
+
+### 3.1 Canonical shape
+
+The generalized abstraction is:
+
+`PreparedLayoutModel + Solve(LayoutConstraints) -> SolvedLayout`
+
+For text today:
 
 - `PreparedText`
 - `Layout(width, lineHeight)`
@@ -92,755 +125,690 @@ For text:
 For UI:
 
 - `PreparedPanelModel`
-- `SolvePanel(width, height, viewport, mode)`
-
-For controls:
-
 - `PreparedControlModel`
-- `SolveControl(width, height, state)`
+- `PreparedItemsModel`
+- `Solve(width, height, viewport, state, density)`
 
-## 3. Framework Evidence That This Fits
+### 3.2 Phase model
 
-## 3.1 Uno evidence
+The architecture should be described as four phases.
 
-Uno already separates framework measure and arrange clearly.
+#### Phase 0: fingerprint inputs
 
-Relevant code paths:
-
-- `UIElement.Layout.cs`
-  - invalidation flags
-  - measure/arrange dirtiness
-- `FrameworkElement.Layout.crossruntime.cs`
-  - the actual `MeasureCore` / `ArrangeCore` pipeline
-- `LayoutPanel`
-  - pluggable `Layout` object
-- `VirtualizingLayout`
-  - pluggable virtualizing layout
-- `ItemsRepeater`
-  - realization, recycling, viewport, anchor, extent
-- `AdaptiveTrigger` and `VisualStateManager`
-  - responsive state switching
-
-Uno also already contains a control-level example of the same pattern in `TextBlockMeasureCache`:
-
-- it extracts a stable measure key from `TextBlock` properties
-- caches measured sizes for available sizes
-- reuses compatible measures instead of recomputing
-
-That is not Pretext, but it is the same architectural idea.
-
-## 3.2 Avalonia evidence
-
-Avalonia also exposes the right lifecycle.
-
-Relevant code paths:
-
-- `Layoutable`
-  - measure/arrange invalidation
-  - `EffectiveViewportChanged`
-  - `LayoutUpdated`
-- `LayoutManager`
-  - queued layout passes
-  - separate measure and arrange queues
-  - effective viewport listeners
-- `Panel`
-  - child collection and parent invalidation helpers
-- `Canvas`
-  - absolute arrangement reference pattern
-- `VirtualizingPanel`
-  - item generation and recycling contract
-- `VirtualizingStackPanel`
-  - viewport-driven realization
-- `TextBlock` / `TextPresenter`
-  - cached `TextLayout`
-  - recreated only when constraint or text-affecting state changes
-
-Avalonia’s `TextBlock` is especially instructive:
-
-- it holds a cached `_textLayout`
-- invalidates that cache only when measure-affecting inputs change
-- reuses the same text layout during render and arrange
-
-That is effectively a local prepared-model cache.
-
-## 4. Generalized Two-Pass Layout Model
-
-The proposed generalized model is:
-
-### Phase 0: input fingerprinting
-
-Compute a stable fingerprint for the layout-affecting inputs.
+Build a stable fingerprint from layout-affecting inputs.
 
 Examples:
 
-- text
-- font
-- inline content
-- child visibility
-- spacing and padding
-- template mode
+- text and inline content
+- font, typography, and density
+- child role definitions
+- padding, spacing, borders, separators
+- item count and per-item content hashes
+- responsive mode or layout preset
+- visibility and collapsed state
+
+This phase decides whether the prepared model can be reused.
+
+#### Phase 1: prepare semantics
+
+Convert raw input into a stable prepared model.
+
+Examples:
+
+- parse content into role nodes
+- prepare text handles
+- compute intrinsic metrics for icons, chips, badges, and fixed chrome
+- classify children into zones such as header, sidebar, body, footer, overlay
+- build obstacle maps or slot groups
+- build item metadata arrays for virtualization
+
+This is where the expensive structural work belongs.
+
+#### Phase 2: solve geometry
+
+Given current constraints:
+
+- available width
+- available height
+- viewport
 - responsive state
-- item count
-- per-item content hashes
+- interaction state
 
-This decides whether the prepared model is reusable.
+compute:
 
-### Phase 1: semantic prepare pass
+- desired size
+- child rectangles
+- item offsets
+- extents
+- occlusion bands
+- realization range
 
-Convert raw control or panel inputs into a prepared model.
+This should be mostly arithmetic and index walking.
 
-Examples:
+#### Phase 3: realize and arrange
 
-- segment text once
-- precompute fixed chrome sizes
-- classify children into layout roles
-- group repeated item templates
-- derive intrinsic dimensions for icons, badges, buttons, and chips
-- build obstacle maps
-- precompute title/body handles
+Consume solved geometry:
 
-This phase should avoid dependence on the current viewport except where unavoidable.
-
-### Phase 2: constraint solve pass
-
-Given available width, height, viewport, and mode:
-
-- solve the actual geometry
-- compute panel rectangles
-- compute child slots
-- compute extents
-- compute realization range
-- compute arrangement of internal control parts
-
-This phase should be arithmetic-first and should not do expensive parsing.
-
-### Phase 3: framework arrange / realization pass
-
-Consume the solved geometry:
-
-- arrange children
-- realize only the visible item range
+- arrange existing children
+- realize the visible slice
+- recycle non-visible elements
 - update retained visuals
-- keep interaction and accessibility with the framework controls
+- preserve framework-native input, focus, automation, and accessibility
 
-This phase should not re-solve the model.
+This phase should not redo the solve.
 
-## 5. Prepared Models for Panels
+## 4. Data Structures Needed for a Real Two-Pass UI System
 
-To apply the model to panel layouts, the panel needs a prepared representation that plays the same role as `PreparedText`.
+The text engine already has a stable `PreparedText` handle. A general UI system needs equivalent prepared models.
 
-### 5.1 Prepared panel model
+### 4.1 Prepared panel model
 
-A `PreparedPanelModel` should capture:
+A panel-level model should contain:
 
-- child roles
-- intrinsic child metrics
-- prepared text handles for text-bearing children
-- chrome constants
-- groupings or template classes
-- optional viewport indexing support
+- child role table
+- prepared text handles for text-bearing regions
+- intrinsic metrics for fixed-content regions
+- group metadata for repeated item classes
+- optional viewport index structures
 
-Example conceptual shape:
+Conceptually:
 
 ```csharp
 public sealed record PreparedPanelModel(
-    IReadOnlyList<PreparedChildNode> Children,
-    IReadOnlyDictionary<string, PreparedTextHandle> TextHandles,
+    LayoutFingerprint Fingerprint,
+    IReadOnlyList<PreparedNode> Nodes,
     PanelChromeMetrics Chrome,
     object? DerivedState);
 ```
 
-### 5.2 Prepared child node
+### 4.2 Prepared control model
 
-Each prepared child node should capture what the geometric solve needs, not the live control itself.
+A control-level model should describe control structure, not live elements.
 
 Examples:
 
-- fixed-size child
-- aspect-ratio child
-- text-driven child
-- intrinsic leaf with cached size
-- fill child
-- anchored child
-- obstacle child
+- template slots
+- optional text regions
+- icon and accessory metrics
+- state-specific chrome variants
+- alignment rules
 
-Example:
+Conceptually:
 
 ```csharp
-public enum PreparedChildKind
-{
-    Fixed,
-    TextBlock,
-    Fill,
-    Aspect,
-    Overlay,
-    Obstacle,
-}
+public sealed record PreparedControlModel(
+    LayoutFingerprint Fingerprint,
+    ControlSlotMap Slots,
+    IReadOnlyList<PreparedTextHandle> TextRegions,
+    ControlChromeMetrics Chrome,
+    object? DerivedState);
 ```
 
-This is analogous to Pretext’s segment kinds.
+### 4.3 Prepared items model
 
-### 5.3 Why panel parsing matters
-
-Without a prepare pass, a custom panel often has to rediscover:
-
-- which children affect height
-- which children are fixed versus elastic
-- which children need text measurement
-- how different children are coupled
-
-That discovery ends up repeated inside every measure pass.
-
-A prepared panel model eliminates that repeated interpretation.
-
-## 6. Prepared Models for Controls
-
-The same idea applies to a single custom control, especially templated controls with text-heavy chrome.
-
-### 6.1 Prepared control model
-
-A `PreparedControlModel` should capture:
-
-- control parts and their roles
-- text-bearing regions
-- fixed chrome metrics
-- alignment rules
-- responsive variants
-- internal dependencies between parts
-
-Example use cases:
-
-- command button with title, subtitle, badge, icon, accelerator
-- navigation row with multi-line label and trailing status
-- mail row with sender, subject, snippet, timestamp, unread marker
-- note card with title, body excerpt, tags, collaborator chips
-
-### 6.2 Why this is useful
-
-A conventional templated control often measures:
-
-- title `TextBlock`
-- subtitle `TextBlock`
-- badge
-- icon
-- stack containers
-
-and only then discovers the final size.
-
-A Pretext-style control can instead:
-
-1. prepare title and subtitle text once
-2. prepare chrome metrics once
-3. solve title/subtitle heights for the current width
-4. derive final rectangles for all template parts
-5. arrange the existing elements
-
-This is the same idea as Pretext, but applied to a control template.
-
-## 7. Measure and Arrange Mapping in Uno
-
-The best mapping for Uno is:
-
-### 7.1 In `MeasureOverride`
-
-Do:
-
-- validate or rebuild the prepared model if the semantic fingerprint changed
-- derive width class or responsive mode
-- solve geometry for the current available size
-- optionally measure leaf children against their known target slot
-- return desired size or logical extent
-
-Do not:
-
-- repeatedly parse content
-- rebuild the prepared model unnecessarily
-- discover text sizes through hidden live controls
-
-### 7.2 In `ArrangeOverride`
-
-Do:
-
-- apply the geometry solved during measure
-- reuse cached placements
-- update leaf positions
-
-Do not:
-
-- run paragraph preparation again
-- repeat expensive text layout work
-
-### 7.3 In `LayoutPanel`
-
-`LayoutPanel` is the cleanest path for reusable non-virtualized Pretext-style layouts in Uno.
-
-Recommended shape:
-
-- `PretextPanelLayout : NonVirtualizingLayout`
-
-Responsibilities:
-
-- maintain `LayoutState`
-- hold prepared panel data
-- solve geometry in `MeasureOverride`
-- apply placement in `ArrangeOverride`
-- expose narrow invalidation channels through `InvalidateMeasure()` and `InvalidateArrange()`
-
-### 7.4 In `ItemsRepeater`
-
-For large item sets, use:
-
-- `PretextVirtualizingLayout : VirtualizingLayout`
-
-Responsibilities:
-
-- own per-item or per-template prepared text handles
-- own extent model
-- own visible-range solve
-- ask `VirtualizingLayoutContext` for elements only when needed
-
-This is where the current custom wrap/list controls should eventually evolve if they become framework-grade reusable controls.
-
-### 7.5 Responsive states in Uno
-
-Uno should use:
-
-- `AdaptiveTrigger`
-- `VisualStateManager`
-
-for:
-
-- choosing topology
-- showing and hiding chrome
-- switching between narrow, medium, and wide visual states
-
-Then use the Pretext-style solver for:
-
-- exact panel rectangles
-- text heights
-- content-dependent widths
-
-Important Uno-specific note:
-
-because adaptive trigger order matters in Uno, state declarations should be ordered from largest constraint to smallest when using minimum-width triggers.
-
-## 8. Measure and Arrange Mapping in Avalonia
-
-The best mapping for Avalonia is similar, but it should be aligned with `LayoutManager` and `Layoutable`.
-
-### 8.1 In `MeasureOverride`
-
-Do:
-
-- validate the prepared model
-- solve geometry for the current constraint
-- measure leaf children against target slots where necessary
-- return desired size
-
-Avalonia’s `TextBlock` and `TextPresenter` already demonstrate the local version of this pattern by invalidating cached `TextLayout` only when needed.
-
-### 8.2 In `ArrangeOverride`
-
-Do:
-
-- consume the solved geometry
-- reuse placements from the last measure
-- avoid new semantic work
-
-### 8.3 In `Panel`
-
-For reusable non-virtualized Pretext layouts in Avalonia, the natural shape is:
-
-- `PretextPanel : Panel`
-
-This panel would:
-
-- parse children into prepared layout roles
-- cache prepared text or intrinsic metrics
-- solve child rectangles in measure
-- arrange children in arrange
-
-Avalonia’s `Canvas` is the simplest reference implementation for absolute placement, but a Pretext panel would be content-aware instead of purely coordinate-driven.
-
-### 8.4 In `VirtualizingPanel`
-
-For large data surfaces:
-
-- `PretextVirtualizingPanel : VirtualizingPanel`
-
-Responsibilities:
-
-- listen to `EffectiveViewportChanged`
-- maintain realization range
-- recycle item containers
-- keep a prepared template and geometry cache
-- realize only what is needed
-
-Avalonia’s `VirtualizingStackPanel` already shows the right lifecycle:
-
-- maintain viewport state
-- realize a range
-- recycle outside the realized viewport
-- compute desired extent
-
-The Pretext-style addition is that per-item text size should come from prepared handles and width solves, not from repeatedly constructing the same child subtree to discover its size.
-
-### 8.5 Effective viewport in Avalonia
-
-Avalonia’s `EffectiveViewportChanged` is especially well-suited for this architecture.
-
-Recommended use:
-
-- use `EffectiveViewportChanged` to trigger realization-range updates
-- use overscan or buffer factors to reduce churn
-- keep geometry solve separate from realization
-
-This maps very cleanly to Pretext’s occlusion and viewport-band logic.
-
-## 9. Control Layout vs Panel Layout
-
-The design differs slightly depending on whether the target is a control or a panel.
-
-### 9.1 Control layout
-
-A control layout is internal to a single reusable component.
+For virtualization, the item model should be array-first and cheap to scan.
 
 Examples:
 
-- mail row control
-- conversation bubble control
-- note card control
-- rich command item
+- per-item intrinsic width and height
+- classification or template kind
+- per-item prepared text handle
+- estimated and solved offsets
+- stable keys for recycling
 
-Recommended design:
+Conceptually:
 
-- prepare internal text fields once
-- prepare chrome metrics once
-- solve internal part rectangles for current width
-- arrange template parts
+```csharp
+public sealed record PreparedItemsModel(
+    LayoutFingerprint Fingerprint,
+    int Count,
+    ReadOnlyMemory<ItemKind> Kinds,
+    ReadOnlyMemory<float> EstimatedWidths,
+    ReadOnlyMemory<float> EstimatedHeights,
+    ReadOnlyMemory<PreparedTextHandle> TextHandles);
+```
 
-This is similar to a mini text engine for the control.
+This is where Pretext’s current lessons matter most:
 
-### 9.2 Panel layout
+- keep hot-path data flat
+- avoid object-heavy per-item structures
+- reserve object graphs for the semantic layer, not the scroll hot path
 
-A panel layout is responsible for multiple children or items.
+## 5. Invalidation Model
+
+The system is only useful if invalidation is disciplined.
+
+### 5.1 Semantic invalidation
+
+Rebuild the prepared model when inputs such as these change:
+
+- actual text or item content
+- font family, size, style, weight
+- template structure
+- role classification
+- visibility or collapse of structural regions
+- item count or item identity
+
+### 5.2 Geometric invalidation
+
+Reuse the prepared model and only rerun solve when these change:
+
+- available width or height
+- viewport
+- spacing and gap values
+- container padding
+- responsive state selection
+- scroll position
+
+### 5.3 Visual invalidation
+
+Do not rebuild semantics or solve geometry when only paint changes:
+
+- foreground or background brushes
+- hover visuals
+- selection colors
+- animation-only effects that do not affect desired size
+
+The core framework should explicitly separate those invalidation classes.
+
+## 6. Caching Strategy
+
+Pretext succeeds because the preparation cache is not an incidental optimization. It is the architecture.
+
+The generalized UI version needs the same attitude.
+
+### 6.1 Cache keys
+
+Prepared models should be keyed by semantic fingerprints.
+
+Solved layouts should be keyed by:
+
+- prepared fingerprint
+- width bucket or exact width
+- height bucket if relevant
+- responsive state
+- viewport bucket for virtualized scenarios
+
+### 6.2 Width buckets
+
+For text-heavy UI, exact-width caches can become too fine-grained.
+
+A practical pattern is:
+
+- exact cache for active width
+- bounded LRU of recent widths
+- optional width buckets for coarse responsive bands
 
 Examples:
 
-- wrap panel
-- masonry panel
-- dashboard board
-- document section layout
+- mobile narrow
+- tablet medium
+- desktop wide
 
-Recommended design:
+### 6.3 Viewport caches
 
-- prepare per-child or per-template metrics
-- compute full geometry map
-- compute extent
-- compute viewport visibility if virtualized
-- arrange children from solved placements
+Virtualized surfaces should not cache realized controls as the primary model.
 
-### 9.3 Shared principle
+Instead cache:
 
-In both cases, the framework should not be asked to discover text size late if the solver can know it early.
+- solved extents
+- cumulative offsets
+- occlusion bands
+- visible range indices
 
-## 10. Generalized Parsing Model for UI Layout
+and treat realized UI elements as a thin reusable layer on top.
 
-To mimic Pretext’s prepare phase, a UI layout system needs a parsing model for content.
+## 7. Responsive Design in a Pretext-Style System
 
-### 10.1 Parse UI into layout tokens
+The system should not confuse responsiveness with templating.
 
-Possible tokens:
+Responsive behavior can be expressed as:
 
-- fixed box
-- text block
-- optional section
-- separator
-- chip run
-- icon slot
-- detail region
-- expandable body
-- overlay
-- obstruction
+1. choose mode
+2. choose constraints
+3. solve geometry inside that mode
 
-The point is not to make everything a drawing primitive. The point is to create a semantic model that can be solved without interrogating the final visual tree.
+The mode switch can depend on:
 
-### 10.2 Parse repeated item templates
+- width thresholds
+- height thresholds
+- aspect ratio
+- density or input modality
+- app state
 
-For lists and wrap surfaces, many items share the same structural shape.
-
-A Pretext-style prepare phase should:
-
-- deduplicate repeated template types
-- cache prepared title/body handles
-- precompute template chrome
-- classify items by template kind
-
-This is exactly what the current Pretext wrap/list samples already do informally through template arrays and template indices.
-
-### 10.3 Parse breakpoints as layout topology
-
-Responsive layout should not only change properties. It should also change topology.
+But once the mode is selected, geometry should still be solved from prepared models rather than hardcoded by imperative tree mutations.
 
 Examples:
 
-- wide: list + detail + inspector
-- medium: list + detail
-- narrow: stacked list then detail
+- a mail app can switch from three-pane to two-pane to single-pane
+- a note editor can collapse sidebars but keep prepared note content
+- a dashboard can promote or demote tiles into new slot groups
 
-The parse/prep layer should know these topology options so the solve phase can quickly choose one.
+## 8. Core Framework Responsibilities
 
-## 11. Caching Strategy
+Before talking about Avalonia or Uno, it helps to define what a shared core framework would own.
 
-The important lesson from Pretext is not just “cache measurements”. It is “cache at the right semantic levels”.
+### 8.1 What belongs in the shared core
 
-### 11.1 Recommended cache layers
+- fingerprints
+- prepared model builders
+- solve algorithms
+- array-based metric tables
+- viewport and occlusion indices
+- layout result objects
+- responsive mode selection policy
+- diagnostic and profiling hooks
 
-1. input fingerprint cache
-2. prepared text cache
-3. prepared control/panel model cache
-4. width-bucket geometry cache
-5. viewport range cache
-6. visual pool
+### 8.2 What does not belong in the shared core
 
-### 11.2 Semantic fingerprint keys
+- framework controls
+- dependency properties
+- direct `UIElement` access
+- dispatcher subscriptions
+- template loading
+- accessibility peer creation
+- renderer-specific drawing
 
-Keys should include only layout-affecting inputs.
+The core should look much more like Pretext itself and much less like a control library.
 
-For control text:
+## 9. Avalonia Integration
 
-- string content
-- font family
-- size
-- weight
-- line-height
-- wrap mode
-- trimming mode
-- locale
+Avalonia already has the lifecycle shape required for this architecture.
 
-For panel or control models:
+### 9.1 Relevant framework evidence
 
-- visible child set
-- template variant
-- spacing/padding values
-- icon presence
-- tag counts
-- mode
+The critical sources are:
 
-### 11.3 Width-bucket solves
+- `Avalonia.Base/Layout/Layoutable.cs`
+- `Avalonia.Base/Layout/LayoutManager.cs`
+- `Avalonia.Controls/Panel.cs`
+- `Avalonia.Controls/VirtualizingPanel.cs`
+- `Avalonia.Controls/VirtualizingStackPanel.cs`
+- `Avalonia.Controls/TextBlock.cs`
 
-Small width changes often do not justify a full semantic rebuild.
+These files show the exact integration seams:
 
-Recommended strategy:
+- `Layoutable` tracks desired size, previous constraints, measure and arrange validity, and exposes `InvalidateMeasure()` / `InvalidateArrange()`
+- `LayoutManager` queues separate measure and arrange work and raises `EffectiveViewportChanged`
+- `VirtualizingPanel` explicitly tells custom panels to drive realization through item generation and viewport awareness
+- `VirtualizingStackPanel` already uses `EffectiveViewportChanged`, cache length, realized element tracking, and recycling
+- `TextBlock` keeps a cached `_textLayout`, which is a direct precedent for prepared-model reuse inside a control
 
-- keep semantic prepare caches exact
-- allow solve caches to be width-bucketed or rounded
-- invalidate the solve cache when the bucket changes materially
+### 9.2 Avalonia mapping
 
-### 11.4 Framework-specific cache placement
+The clean mapping is:
 
-In Uno:
+- `Prepared*Model` lives outside the visual tree
+- `MeasureOverride` ensures the prepared model exists and solves for current size
+- `ArrangeOverride` applies solved rectangles and avoids semantic rebuilds
+- `EffectiveViewportChanged` updates viewport-driven solve state for virtualized surfaces
+- `VirtualizingPanel` owns realization and recycling
 
-- cache prepared models in the control or layout object
-- keep layout state in `LayoutState` for `LayoutPanel` and `ItemsRepeater`
+### 9.3 Avalonia panel pattern
 
-In Avalonia:
+For a custom panel:
 
-- cache prepared models on the control or panel instance
-- let `LayoutManager` continue to drive invalidation and pass execution
+1. fingerprint children and panel-affecting properties
+2. rebuild `PreparedPanelModel` only when semantic inputs change
+3. in `MeasureOverride`, solve geometry for `availableSize`
+4. return desired size from solved extent
+5. in `ArrangeOverride`, arrange children using cached solved rectangles
 
-## 12. Virtualization and Pretext-Style Layout
+This works well for:
 
-The best large-data architecture is:
+- masonry
+- wrap panels with non-uniform items
+- dense dashboard tiles
+- editorial surfaces
+- geometry-aware forms
 
-1. semantic prepare of templates or item classes
-2. solve item heights from prepared text
-3. compute placements and extent
-4. build viewport index
-5. realize only the visible slice
+### 9.4 Avalonia virtualized pattern
 
-This is already present in principle in:
+For an item surface:
 
-- Uno `ItemsRepeater`
-- Avalonia `VirtualizingPanel`
+1. prepare item metrics into flat arrays
+2. maintain cumulative offsets or column assignment arrays
+3. build an occlusion index for quick viewport lookup
+4. use `EffectiveViewportChanged` to update only the visible range
+5. realize containers through `VirtualizingPanel`
+6. recycle controls aggressively
 
-What Pretext adds is better intrinsic sizing before realization.
+The current `VirtualizingStackPanel` proves the host framework supports:
 
-### 12.1 Why this matters
+- viewport-driven realization
+- cache-length overscan
+- recycling pools
+- estimated size fallback
 
-Without a prepare phase, many variable-height lists do one of two bad things:
+A Pretext-style virtualized wrap or masonry panel would follow the same contract, but replace stack-specific geometry with a custom solver.
 
-- estimate poorly and correct after live measure
-- realize too much just to discover height
+### 9.5 Avalonia control pattern
 
-Pretext-style sizing lets the virtualization system start with much more accurate geometry.
+For a custom control:
 
-## 13. Proposed Reusable Abstractions
+1. parse control content and chrome into a `PreparedControlModel`
+2. prepare text-bearing regions once
+3. solve slot rectangles in measure
+4. arrange template parts or retained child controls in arrange
 
-### 13.1 Shared, framework-agnostic abstractions
+This is especially attractive for:
 
-- `PreparedLayoutModel`
-- `PreparedControlModel`
+- mail rows
+- note cards
+- chips and tags
+- inspector property rows
+- list items with rich inline structure
+
+### 9.6 Avalonia work packages
+
+Recommended implementation order:
+
+1. Build a framework-agnostic core package with prepared models, solve results, and viewport indices.
+2. Add an Avalonia `PreparedLayoutHost` base that owns fingerprints, prepared caches, and solved results.
+3. Add `PretextPanelBase : Panel` for non-virtualized custom geometry panels.
+4. Add `PretextVirtualizingPanelBase : VirtualizingPanel` with:
+   - prepared item arrays
+   - viewport solve
+   - realized range management
+   - recycle-key integration
+5. Add `PretextVirtualizingItemsControl : ItemsControl, ILogicalScrollable` as the scroll-host bridge for `ScrollViewer`.
+6. Add `PretextControlBase : TemplatedControl` for slot-based control layout.
+7. Add diagnostics:
+   - fingerprint hits and misses
+   - prepare duration
+   - solve duration
+   - realized element count
+   - viewport range
+
+## 10. Uno Integration
+
+Uno also has the right lifecycle shape, but the extension points differ from Avalonia.
+
+### 10.1 Relevant framework evidence
+
+The critical sources are:
+
+- `Uno.UI/UI/Xaml/UIElement.Layout.cs`
+- `Uno.UI/UI/Xaml/FrameworkElement.Layout.crossruntime.cs`
+- `Uno.UI/UI/Xaml/Controls/LayoutPanel/LayoutPanel.cs`
+- `Uno.UI/UI/Xaml/Controls/Repeater/ItemsRepeater.cs`
+- `Uno.UI/UI/Xaml/Controls/Repeater/VirtualizingLayout.cs`
+- `Uno.UI/UI/Xaml/Controls/TextBlock/TextBlockMeasureCache.cs`
+- `Uno.UI/UI/Xaml/AdaptiveTrigger.cs`
+- `Uno.UI/UI/Xaml/VisualStateManager.cs`
+
+Those files show:
+
+- Uno explicitly tracks dirty flags and dirty paths on `UIElement`
+- `FrameworkElement.MeasureCore` and arrange logic already separate lifecycle phases
+- `LayoutPanel` is the native hook for pluggable layout algorithms
+- `ItemsRepeater` and `VirtualizingLayout` provide a framework-approved path for large-data realization and viewport-aware layout
+- `TextBlockMeasureCache` is a direct precedent for extracting stable measure keys and caching compatible results
+- `AdaptiveTrigger` and `VisualStateManager` provide responsive and stateful mode selection around a layout engine
+
+### 10.2 Uno mapping
+
+The clean mapping is:
+
+- shared prepared models stay outside `UIElement`
+- `MeasureOverride` or `Layout.Measure(...)` builds or reuses prepared state
+- `ArrangeOverride` or `Layout.Arrange(...)` consumes solved rectangles
+- `ItemsRepeater + VirtualizingLayout` owns large item realization
+- `AdaptiveTrigger` or direct width checks choose high-level responsive mode
+- solved geometry then handles the actual placement inside that mode
+
+### 10.3 Uno panel pattern
+
+The most natural hook for Uno is `LayoutPanel`.
+
+That gives a built-in place to host:
+
+- `Measure(context, availableSize)`
+- `Arrange(context, finalSize)`
+- layout-driven invalidation through `InvalidateMeasure` and `InvalidateArrange`
+
+A Pretext-style layout object for Uno could:
+
+1. fingerprint semantic inputs
+2. build or reuse a prepared model
+3. solve geometry in `Measure`
+4. cache solved rectangles
+5. apply them in `Arrange`
+
+This is a better fit than embedding all logic directly in a panel subclass when the intent is to author reusable layout algorithms.
+
+### 10.4 Uno repeater pattern
+
+For large item surfaces, `ItemsRepeater` is the right host.
+
+`ItemsRepeater` already manages:
+
+- view generation
+- layout state
+- visible and realization windows
+- anchor behavior
+- layout reentrancy checks
+
+`VirtualizingLayout` already expects layout authors to supply:
+
+- measure behavior
+- arrange behavior
+- items-changed handling
+- viewport significance policy
+
+That is exactly where a Pretext-style item geometry solver belongs.
+
+### 10.5 Uno control pattern
+
+For controls that must remain built from normal Uno controls:
+
+1. prepare semantic slots and text handles
+2. solve rectangles from current size and control state
+3. arrange retained child controls on a `Canvas` or template root
+4. use `VisualStateManager` only for paint/state differences, not as the primary geometry solver
+
+This avoids turning responsive geometry into large numbers of imperative visual-tree mutations.
+
+### 10.6 Uno responsive pattern
+
+Responsive design should be layered:
+
+1. `AdaptiveTrigger` or equivalent width-state logic selects mode
+2. the mode feeds constraints into the two-pass solver
+3. the solver computes actual child rectangles
+4. arrange consumes those rectangles
+
+This is more robust than encoding the entire responsive geometry inside visual-state setters.
+
+### 10.7 Uno work packages
+
+Recommended implementation order:
+
+1. Build a framework-agnostic core package shared with Avalonia work.
+2. Add a `PretextLayout`-style general geometry package for non-text prepared models.
+3. Add `PretextLayoutPanelLayout : Layout` for Uno `LayoutPanel`.
+4. Add `PretextVirtualizingLayout : VirtualizingLayout` for `ItemsRepeater`.
+5. Add `PretextControlLayoutHost` for slot-based control geometry using retained child controls.
+6. Add diagnostics:
+   - prepare count
+   - solve count
+   - viewport update count
+   - realized range
+   - cache hit rate
+
+Current status in this workspace:
+
+- `PretextPanelLayout` is implemented for `LayoutPanel`
+- `PretextVirtualizingLayout` is implemented for `ItemsRepeater`
+- `PretextControlLayoutHost` is implemented for retained child-control slot layout
+- shared diagnostics are implemented for prepare, solve, viewport, and realized-range tracking
+- the main remaining Uno framework work is broader validation and reusable sample coverage built on top of those adapters
+
+## 11. Shared Problems Both Frameworks Need to Solve
+
+The two frameworks differ, but the hard problems are mostly the same.
+
+### 11.1 Fingerprint correctness
+
+If the fingerprint misses a semantic input, cached prepared state becomes unsafe.
+
+### 11.2 Object churn
+
+If prepared item models are too object-heavy, the semantic pass becomes allocation-heavy and loses the main benefit.
+
+### 11.3 Partial invalidation
+
+Large item collections need range-level updates, not full rebuilds, when only a few items change.
+
+### 11.4 Viewport synchronization
+
+Virtualized panels must keep total extent, visible range, and realized controls consistent even when scroll and size changes interleave.
+
+### 11.5 Framework-native behavior
+
+The system must preserve:
+
+- keyboard navigation
+- focus behavior
+- automation
+- hit testing
+- bring-into-view behavior
+- pointer routing
+
+That is why solved geometry should usually feed native controls instead of replacing them with a custom rendering world unless absolutely necessary.
+
+## 12. Recommended Architecture
+
+The long-term architecture should be layered like this:
+
+### Layer 1: core prepared-layout engine
+
+Framework-independent:
+
+- fingerprints
+- prepared models
+- solve algorithms
+- occlusion indices
+- reusable diagnostics
+
+### Layer 2: framework adapters
+
+Framework-specific:
+
+- Avalonia base classes and virtualizing hosts
+- Uno `Layout`, `LayoutPanel`, and `VirtualizingLayout` adapters
+- template-part and child-control arrangement helpers
+
+### Layer 3: app-facing controls and panels
+
+Reusable controls:
+
+- masonry panels
+- wrap panels
+- non-uniform lists
+- mail rows
+- note cards
+- dashboards
+- responsive shells
+
+### Layer 4: app composition
+
+Application-specific mode selection, theming, and interaction design.
+
+## 13. Initial Delivery Plan
+
+The user asked to start with the core framework model, then do Avalonia and Uno integration work. The right staged plan is:
+
+### Phase A: core framework
+
+Deliver a framework-neutral design and prototype around:
+
+- `LayoutFingerprint`
 - `PreparedPanelModel`
-- `LayoutSolveInput`
-- `LayoutGeometryResult`
-- `ViewportQuery`
-- `RealizationRange`
+- `PreparedControlModel`
+- `PreparedItemsModel`
+- `LayoutConstraints`
+- `SolvedLayout`
+- `VerticalOcclusionIndex`
+- diagnostic counters and tracing hooks
 
-### 13.2 Uno-specific abstractions
+### Phase B: Avalonia integration
 
-- `PretextPanelLayout : NonVirtualizingLayout`
-- `PretextWrapLayout : VirtualizingLayout`
-- `PretextListLayout : VirtualizingLayout`
-- `PretextResponsiveShell`
-- `PretextLayoutState`
+Deliver:
 
-### 13.3 Avalonia-specific abstractions
+- `PretextPanelBase : Panel`
+- `PretextVirtualizingPanelBase : VirtualizingPanel`
+- `PretextVirtualizingItemsControl : ItemsControl, ILogicalScrollable`
+- `PretextTemplatedLayoutControl : TemplatedControl`
+- `EffectiveViewportChanged` integration
+- logical-scroll / `ScrollViewer` integration
+- realized-range and recycle support
 
-- `PretextPanel : Panel`
-- `PretextVirtualizingPanel : VirtualizingPanel`
-- `PretextResponsiveLayoutRoot`
-- `PreparedLayoutCache`
+### Phase C: Uno integration
 
-### 13.4 Control-level abstractions
+Deliver:
 
-- `PreparedChromeMetrics`
-- `PreparedTextSlot`
-- `ControlLayoutSlot`
-- `ControlLayoutFingerprint`
+- `PretextLayoutPanelLayout : Layout`
+- `PretextVirtualizingLayout : VirtualizingLayout`
+- `PretextControlLayoutHost`
+- `ItemsRepeater` adapter layer
+- responsive mode integration with `AdaptiveTrigger` or width-state selection
 
-## 14. Design Rules for a Two-Pass System
+Current implementation state:
 
-1. Parse semantic content once.
-2. Separate preparation from geometry solving.
-3. Make geometry solving pure and arithmetic-first.
-4. Keep live controls as interactive leaves, not measurement oracles.
-5. Cache at semantic layers, not only final sizes.
-6. Invalidate narrowly.
-7. Use viewport change as a realization signal, not a semantic rebuild signal.
-8. Keep arrange cheap.
-9. Prefer width-only or width-dominant solves when possible.
-10. Build reusable prepared models for both controls and panels.
+- the `LayoutPanel`, `VirtualizingLayout`, and control-host layers are in place in the Uno sample workspace
+- responsive mode selection is already exercised in the sample browser through width-driven solve logic
+- diagnostics plumbing is now in place on the shared controller and the virtualized adapters
+- the remaining planned Uno work is mostly expanded reusable sample coverage and sample-level validation
 
-## 15. Example Design: A Pretext Mail Row
+### Phase D: sample and validation layer
 
-To make the idea concrete, consider a mail row.
+Deliver identical sample classes across both frameworks where practical:
 
-Raw inputs:
+- non-uniform wrap
+- masonry
+- mail list row
+- note card
+- responsive mail shell
+- responsive notes shell
 
-- sender
-- subject
-- snippet
-- timestamp
-- unread state
-- attachment icon
+Current implementation state:
 
-Prepared control model:
+- shared `mail list row` and `note card` sample definitions now exist in the core framework layer
+- shared `responsive mail shell` and `responsive notes shell` definitions now exist in the core framework layer
+- shared `non-uniform wrap` and `masonry` item-surface definitions now exist in the core framework layer through `IPreparedItemsLayoutDefinition`
+- the shared occlusion model now supports sparse viewport selections, which is required for shortest-column masonry and is exercised by both the Uno and Avalonia virtualization adapters
+- all shared control, shell, wrap, and masonry definitions are validated directly in core tests and exercised through Avalonia control-host or virtualization tests
+- the Uno sample browser now hosts shared control, shell, wrap, and masonry samples through `PretextControlLayoutHost` and the reusable `VirtualizingLayout` adapter layer
+- an actual Avalonia visual sample browser now exists in `Uno/PretextSamples/Pretext.Avalonia.Samples`
+- the Avalonia browser hosts the same shared `mail row`, `note card`, `responsive mail shell`, `responsive notes shell`, `wrap`, and `masonry` samples through `Pretext.Avalonia.Controls`
+- the Avalonia browser includes a live diagnostics pane for prepare, solve, cache-hit, viewport, and realization state inspection
+- headless screenshot validation now captures the real Avalonia browser for all shared samples and emits PNG plus manifest artifacts under `Uno/PretextSamples/artifacts/headless-screenshots/avalonia-sample-browser`
+- the remaining sample-layer work is now optional polish: richer screenshot diffing, more interaction scenarios, or a broader gallery beyond the initial shared sample set
 
-- prepared sender text
-- prepared subject text
-- prepared snippet text
-- fixed metrics for timestamp, icon slot, padding, badge
-- responsive variants for wide and narrow row modes
+## 14. Final Position
 
-Solve result for a given width:
+Pretext’s architecture generalizes well because the important lesson is not about text specifically. It is about staging:
 
-- sender rect
-- subject rect
-- snippet rect
-- timestamp rect
-- icon rect
-- final row height
+- prepare semantics once
+- solve geometry often
+- realize minimally
 
-Framework step:
+Avalonia and Uno already expose the right lifecycle hooks to support this:
 
-- arrange the existing parts into those slots
+- explicit measure and arrange phases
+- invalidation systems
+- viewport-aware virtualization hooks
+- retained native controls
 
-No hidden `TextBlock`s are needed to discover row height after the fact.
+So the correct direction is not to treat Pretext as only a text engine.
 
-## 16. Example Design: A Pretext Wrap Panel
+The correct direction is to treat it as the first finished example of a broader prepared-layout architecture that can power:
 
-Raw inputs:
+- text layout
+- custom panels
+- virtualized non-uniform item surfaces
+- slot-based controls
+- responsive shells
 
-- 100k items
-- each item has title/body/tags
-
-Prepared panel model:
-
-- template classes
-- prepared title/body handles
-- chrome metrics
-- per-template intrinsic width rules
-
-Solve result:
-
-- tile heights
-- tile placements
-- content extent
-- band index
-- visible range
-
-Framework step:
-
-- realize only visible containers
-- assign geometry
-
-This is the generalized form of the current Pretext masonry and virtual wrap samples.
-
-## 17. What Is Harder
-
-Some problems still need separate work.
-
-### 17.1 Fully editable text
-
-If the surface needs:
-
-- caret movement
-- selection
-- IME composition
-- incremental edits
-- bidirectional caret rules
-
-then the solver needs a richer incremental model.
-
-### 17.2 Arbitrary child intrinsic sizing
-
-If every child is an arbitrary complex subtree with no stable intrinsic model, a semantic prepare pass becomes harder.
-
-In those cases:
-
-- require children to expose intrinsic metrics
-- or limit the scope to text-heavy or partly-constrained children
-
-### 17.3 Animation-heavy rearrangement
-
-If the layout is continuously animating topology, the solver still helps, but the animation layer should interpolate solved rectangles rather than re-parsing content every frame.
-
-## 18. Final Position
-
-Pretext’s main architectural lesson is not only about text. It is about how to structure layout work:
-
-- parse first
-- cache second
-- solve geometry third
-- realize visuals last
-
-Both Uno and Avalonia already provide the right two-pass host lifecycle for this:
-
-- measure
-- arrange
-- narrow invalidation
-- viewport signaling
-- virtualization hooks
-
-So yes, there is a practical way to do something similar for panel layouts and control layouts.
-
-The right direction is a framework-integrated prepared-layout architecture where:
-
-- text preparation is one kind of semantic prepare pass
-- control and panel parsing are additional prepare passes
-- measure performs geometry solving over prepared state
-- arrange consumes solved geometry
-- virtualization uses the same prepared state for accurate extents and realized ranges
-
-That is the natural path from “Pretext as a text engine” to “Pretext-style layout as a broader UI-system architecture”.
+across both Avalonia and Uno.
