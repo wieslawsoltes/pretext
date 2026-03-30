@@ -41,8 +41,9 @@ public sealed class OverviewSampleView : UserControl
         cards.Children.Add(BuildFeatureCard("Mail App", "A responsive inbox surface reflows folders, message rows, and the reader pane with explicit panel rects instead of adaptive Grid heuristics."));
         cards.Children.Add(BuildFeatureCard("Notes App", "A note workspace swaps between stacked, split, and three-pane arrangements while Pretext keeps cards and editor previews geometrically exact."));
         cards.Children.Add(BuildFeatureCard("Rich Text", "Inline text, code spans, and atomic chips share one flow while only the text fragments split across lines."));
-        cards.Children.Add(BuildFeatureCard("Dynamic Layout", "Two-column text routes around badges and a headline box by asking the engine for one line at a time."));
-        cards.Children.Add(BuildFeatureCard("Editorial Engine", "Animated circular obstacles and a pull quote force live reflow in a magazine-style stage."));
+        cards.Children.Add(BuildFeatureCard("Dynamic Layout", "A fixed-height editorial spread with obstacle-aware title routing and continuous flow."));
+        cards.Children.Add(BuildFeatureCard("Editorial Engine", "Animated orbs, live text reflow, pull quotes, and multi-column flow with zero UI-tree measurements."));
+        cards.Children.Add(BuildFeatureCard("Justification Comparison", "Greedy, hyphenated, and optimal paragraph breaking appear side by side so rivers and spacing variance are easy to compare."));
         cards.Children.Add(BuildFeatureCard("Variable ASCII", "A particle field is rendered twice: once with a monospace ramp and once with proportional glyph choices."));
 
         stack.Children.Add(SampleUi.CreateCard(cards));

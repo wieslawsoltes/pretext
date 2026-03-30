@@ -24,6 +24,7 @@
         <NavigationViewItem Content="Rich Text" Tag="rich" Icon="Document" />
         <NavigationViewItem Content="Dynamic Layout" Tag="dynamic" Icon="Pictures" />
         <NavigationViewItem Content="Editorial Engine" Tag="editorial" Icon="Play" />
+        <NavigationViewItem Content="Justification Comparison" Tag="justification" Icon="Document" />
         <NavigationViewItem Content="Variable ASCII" Tag="ascii" Icon="Preview" />
       </NavigationView.MenuItems>
 

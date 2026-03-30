@@ -19,6 +19,7 @@ public sealed partial class MainPage : Page
         ["rich"] = static () => new RichNoteSampleView(),
         ["dynamic"] = static () => new DynamicLayoutSampleView(),
         ["editorial"] = static () => new EditorialEngineSampleView(),
+        ["justification"] = static () => new JustificationComparisonSampleView(),
         ["ascii"] = static () => new VariableAsciiSampleView(),
     };
 
