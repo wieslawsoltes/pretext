@@ -1,6 +1,6 @@
 <Project Sdk="Uno.Sdk">
   <ItemGroup>
-    <ProjectReference Include="..\Pretext.Uno\Pretext.Uno.csproj" />
+    <ProjectReference Include="..\Pretext\Pretext.csproj" />
     <ProjectReference Include="..\Pretext.Uno.Controls\Pretext.Uno.Controls.csproj" />
   </ItemGroup>
   <PropertyGroup>

@@ -18,6 +18,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Pretext.Uno\Pretext.Uno.csproj" />
+    <ProjectReference Include="..\Pretext\Pretext.csproj" />
   </ItemGroup>
 </Project>
