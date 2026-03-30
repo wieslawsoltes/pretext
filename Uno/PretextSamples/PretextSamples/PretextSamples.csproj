@@ -1,6 +1,7 @@
 <Project Sdk="Uno.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\Pretext.Uno\Pretext.Uno.csproj" />
+    <ProjectReference Include="..\Pretext.Uno.Controls\Pretext.Uno.Controls.csproj" />
   </ItemGroup>
   <PropertyGroup>
     <TargetFrameworks>net10.0-desktop</TargetFrameworks>

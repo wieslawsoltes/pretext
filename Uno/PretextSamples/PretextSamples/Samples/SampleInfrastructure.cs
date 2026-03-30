@@ -1,10 +1,10 @@
 using Microsoft.UI;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Pretext.Uno;
+using Pretext.Uno.Controls;
 using Windows.Foundation;
 
 namespace PretextSamples.Samples;
@@ -44,94 +44,6 @@ internal readonly record struct CircleObstacle(double X, double Y, double Radius
 internal readonly record struct Interval(double Left, double Right)
 {
     public double Width => Right - Left;
-}
-
-internal readonly record struct VerticalBand(int StartIndex, int EndIndexExclusive, double Top, double Bottom);
-
-internal readonly record struct VerticalOcclusionRange(
-    int StartIndex,
-    int EndIndexExclusive,
-    int StartBandIndex,
-    int EndBandIndexExclusive);
-
-internal sealed class VerticalOcclusionIndex
-{
-    private readonly IReadOnlyList<VerticalBand> _bands;
-
-    public VerticalOcclusionIndex(IReadOnlyList<VerticalBand> bands)
-    {
-        _bands = bands;
-    }
-
-    public int BandCount => _bands.Count;
-
-    public bool TryQuery(double top, double bottom, out VerticalOcclusionRange range)
-    {
-        range = default;
-        if (_bands.Count == 0 || bottom < 0)
-        {
-            return false;
-        }
-
-        var firstBand = FindFirstBandEndingAfter(top);
-        if (firstBand >= _bands.Count)
-        {
-            return false;
-        }
-
-        var endBandExclusive = FindFirstBandStartingAfter(bottom);
-        if (endBandExclusive <= firstBand)
-        {
-            return false;
-        }
-
-        range = new VerticalOcclusionRange(
-            _bands[firstBand].StartIndex,
-            _bands[endBandExclusive - 1].EndIndexExclusive,
-            firstBand,
-            endBandExclusive);
-        return true;
-    }
-
-    private int FindFirstBandEndingAfter(double top)
-    {
-        var lo = 0;
-        var hi = _bands.Count;
-        while (lo < hi)
-        {
-            var mid = (lo + hi) / 2;
-            if (_bands[mid].Bottom < top)
-            {
-                lo = mid + 1;
-            }
-            else
-            {
-                hi = mid;
-            }
-        }
-
-        return lo;
-    }
-
-    private int FindFirstBandStartingAfter(double bottom)
-    {
-        var lo = 0;
-        var hi = _bands.Count;
-        while (lo < hi)
-        {
-            var mid = (lo + hi) / 2;
-            if (_bands[mid].Top <= bottom)
-            {
-                lo = mid + 1;
-            }
-            else
-            {
-                hi = mid;
-            }
-        }
-
-        return lo;
-    }
 }
 
 internal static class SampleTextMetrics
@@ -195,7 +107,12 @@ internal static class SampleUi
 {
     public static FrameworkElement CreatePageRoot(UIElement content)
     {
-        return new StretchScrollHost(content);
+        var host = new StretchScrollHost(content)
+        {
+            Background = SampleTheme.PageBrush,
+            ContentBackground = SampleTheme.PageBrush,
+        };
+        return host;
     }
 
     public static StackPanel CreatePageStack()
@@ -297,104 +214,6 @@ internal static class SampleUi
         {
             pool[index].Visibility = index < count ? Visibility.Visible : Visibility.Collapsed;
         }
-    }
-}
-
-internal sealed class StretchScrollHost : Grid
-{
-    private readonly Border _contentHost;
-    private readonly ScrollViewer _scrollViewer;
-
-    internal ScrollViewer ScrollViewer => _scrollViewer;
-
-    internal FrameworkElement ScrollContent => _contentHost;
-
-    public StretchScrollHost(UIElement content)
-    {
-        Background = SampleTheme.PageBrush;
-        HorizontalAlignment = HorizontalAlignment.Stretch;
-        VerticalAlignment = VerticalAlignment.Stretch;
-
-        _contentHost = new Border
-        {
-            Padding = new Thickness(28),
-            Background = SampleTheme.PageBrush,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            Child = content,
-        };
-
-        _scrollViewer = new ScrollViewer
-        {
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollMode = ScrollMode.Disabled,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Content = _contentHost,
-        };
-
-        Children.Add(_scrollViewer);
-
-        SizeChanged += OnSizeChanged;
-    }
-
-    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        _contentHost.Width = Math.Max(0, e.NewSize.Width);
-    }
-
-    internal bool TryGetLocalViewportBounds(FrameworkElement target, double overscan, out double top, out double bottom)
-    {
-        top = 0;
-        bottom = 0;
-        if (target.ActualHeight <= 0)
-        {
-            return false;
-        }
-
-        var viewportHeight = _scrollViewer.ActualHeight > 0 ? _scrollViewer.ActualHeight : ActualHeight;
-        if (viewportHeight <= 0)
-        {
-            return false;
-        }
-
-        try
-        {
-            var origin = target.TransformToVisual(_contentHost).TransformPoint(new Point(0, 0));
-            top = Math.Max(0, _scrollViewer.VerticalOffset - origin.Y - overscan);
-            bottom = _scrollViewer.VerticalOffset + viewportHeight - origin.Y + overscan;
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-}
-
-internal sealed class UiRenderScheduler
-{
-    private readonly DispatcherQueue _dispatcherQueue;
-    private readonly Action _action;
-    private bool _scheduled;
-
-    public UiRenderScheduler(DispatcherQueue dispatcherQueue, Action action)
-    {
-        _dispatcherQueue = dispatcherQueue;
-        _action = action;
-    }
-
-    public void Schedule()
-    {
-        if (_scheduled)
-        {
-            return;
-        }
-
-        _scheduled = true;
-        _dispatcherQueue.TryEnqueue(() =>
-        {
-            _scheduled = false;
-            _action();
-        });
     }
 }
 

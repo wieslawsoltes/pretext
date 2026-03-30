@@ -14,6 +14,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
 using Pretext.Uno;
+using Pretext.Uno.Controls;
 using SkiaSharp;
 using Windows.Foundation;
 using Windows.Storage;
