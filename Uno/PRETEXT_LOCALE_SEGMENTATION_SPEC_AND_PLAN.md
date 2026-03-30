@@ -2,7 +2,7 @@
 
 Status: draft design and rollout plan  
 Audience: Pretext contributors, Uno integration maintainers, Unicode/text-layout implementers  
-Scope: adding real locale-sensitive segmentation behavior to the C# `Pretext.Uno` port while preserving the current fast-path design
+Scope: adding real locale-sensitive segmentation behavior to the C# `Pretext` project while preserving the current fast-path design
 
 This document supplements:
 
@@ -154,7 +154,7 @@ The locale-sensitive segmenter should replace only the **initial word-boundary s
 
 ## 6.1 Add a word segmentation abstraction
 
-Introduce an internal abstraction in `Pretext.Uno`:
+Introduce an internal abstraction in `Pretext`:
 
 ```csharp
 internal interface IWordSegmentationProvider
@@ -363,17 +363,17 @@ That Uno implementation is:
 - tied to Uno.UI internals
 - Skia-oriented
 
-So `Pretext.Uno` should **not** directly depend on internal Uno text formatting types.
+So `Pretext` should **not** directly depend on internal Uno text formatting types.
 
 Instead, we should do one of the following:
 
 ### Preferred long-term path
 
-Extract or duplicate the minimal ICU boundary-iterator layer into a reusable internal helper for `Pretext.Uno`.
+Extract or duplicate the minimal ICU boundary-iterator layer into a reusable internal helper for `Pretext`.
 
 ### Acceptable short-term path
 
-Vendor a small ICU boundary adapter into `Pretext.Uno` based on the Uno implementation shape, but keep it isolated behind the segmentation provider interface.
+Vendor a small ICU boundary adapter into `Pretext` based on the Uno implementation shape, but keep it isolated behind the segmentation provider interface.
 
 ## 10. Detailed Design
 
@@ -498,7 +498,7 @@ Reasons:
 
 ## 11.2 Browser/Wasm option
 
-If `Pretext.Uno` is later used in browser-hosted Uno heads, a browser-specific provider could use JS interop to call `Intl.Segmenter` directly.
+If `Pretext` is later used in browser-hosted Uno heads, a browser-specific provider could use JS interop to call `Intl.Segmenter` directly.
 
 That would be the closest possible parity path for WebAssembly/browser execution.
 
@@ -629,7 +629,7 @@ Goal:
 
 Tasks:
 
-1. Implement a minimal ICU boundary adapter in `Pretext.Uno`.
+1. Implement a minimal ICU boundary adapter in `Pretext`.
 2. Feed explicit `SetLocale(...)` locale into ICU, falling back to ambient current UI culture only when locale is not set.
 3. Return word boundary segments and offsets.
 4. Derive `isWordLike` conservatively if ICU does not provide it directly through the chosen API surface.

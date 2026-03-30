@@ -2,7 +2,7 @@
 
 Status: draft working specification  
 Audience: Pretext contributors, Uno contributors, control authors, performance-focused app teams  
-Scope: how the Pretext algorithms and the current `Pretext.Uno` port can be used to build custom layouts, virtualized controls, responsive shells, and a broader Uno UI system
+Scope: how the Pretext algorithms and the current `Pretext` project can be used to build custom layouts, virtualized controls, responsive shells, and a broader Uno UI system
 
 This document supplements `Uno/PRETEXT_TECHNICAL_SPEC.md`. That document explains how the Pretext engine itself works. This document focuses on how that engine should be applied inside the Uno Platform layout system to build controls and application surfaces.
 
@@ -32,7 +32,7 @@ That makes Pretext useful far beyond raw paragraph rendering. It can act as the 
 This specification is based on:
 
 - the TypeScript reference engine in `src/layout.ts`, `src/analysis.ts`, `src/measurement.ts`, `src/line-break.ts`, and `src/bidi.ts`
-- the C# port in `Uno/PretextSamples/Pretext.Uno/*.cs`
+- the C# port in `Uno/PretextSamples/Pretext/*.cs`
 - the current Uno integration layer in `Uno/PretextSamples/Pretext.Uno.Controls/*.cs`
 - the responsive and virtualized sample surfaces in `Uno/PretextSamples/PretextSamples/Samples/*.cs`
 - the Uno framework layout and control sources in:
@@ -847,7 +847,7 @@ The current custom list and wrap controls already follow this model, and the sam
 
 ## 13. Recommended Architectural Boundaries
 
-### 13.1 What belongs in `Pretext.Uno`
+### 13.1 What belongs in `Pretext`
 
 - pure engine
 - preparation and layout APIs
@@ -1015,7 +1015,7 @@ Its value is not limited to rendering paragraphs faster. Its real value is that 
 
 The correct long-term direction is a layered system:
 
-- `Pretext.Uno` for text preparation and line layout
+- `Pretext` for text preparation and line layout
 - `Pretext.Uno.Controls` for reusable geometry, viewport, and control primitives
 - Uno framework extension points such as `Panel`, `LayoutPanel`, and `ItemsRepeater` for final integration
 

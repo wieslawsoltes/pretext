@@ -3,7 +3,7 @@
 This document describes the current Pretext architecture across:
 
 - the TypeScript reference engine in `src/`
-- the C# port in `Uno/PretextSamples/Pretext.Uno/`
+- the C# port in `Uno/PretextSamples/Pretext/`
 - the Uno integration layer in `Uno/PretextSamples/Pretext.Uno.Controls/`
 
 It is an internal implementation document, not a public API guide. Use `README.md` for public usage examples and `DEVELOPMENT.md` for the current verification workflow.
@@ -51,12 +51,12 @@ It also has an explicit `pre-wrap` mode for editor-like input and preserved whit
 
 | Responsibility | File |
 | --- | --- |
-| Public API, shared types, cache control, test hooks | `Uno/PretextSamples/Pretext.Uno/PretextLayout.cs` |
-| Text analysis and token merging | `Uno/PretextSamples/Pretext.Uno/PretextLayout.Analysis.cs` |
-| Measurement via Skia, font parsing, segment cache | `Uno/PretextSamples/Pretext.Uno/PretextLayout.Measurement.cs` |
-| Prepare/materialization pipeline | `Uno/PretextSamples/Pretext.Uno/PretextLayout.Preparation.cs` |
-| Internal line walker | `Uno/PretextSamples/Pretext.Uno/PretextLayout.LineBreak.cs` |
-| Rich-path bidi metadata | `Uno/PretextSamples/Pretext.Uno/PretextLayout.Bidi.cs` |
+| Public API, shared types, cache control, test hooks | `Uno/PretextSamples/Pretext/PretextLayout.cs` |
+| Text analysis and token merging | `Uno/PretextSamples/Pretext/PretextLayout.Analysis.cs` |
+| Measurement via Skia, font parsing, segment cache | `Uno/PretextSamples/Pretext/PretextLayout.Measurement.cs` |
+| Prepare/materialization pipeline | `Uno/PretextSamples/Pretext/PretextLayout.Preparation.cs` |
+| Internal line walker | `Uno/PretextSamples/Pretext/PretextLayout.LineBreak.cs` |
+| Rich-path bidi metadata | `Uno/PretextSamples/Pretext/PretextLayout.Bidi.cs` |
 
 ### Uno integration
 
@@ -346,7 +346,7 @@ This keeps the core layout path simple while still giving custom renderers enoug
 
 ## 5. C# port architecture
 
-The C# port in `Pretext.Uno` preserves the TypeScript API shape and most of the semantic behavior, but it is not a literal transliteration of every low-level optimization.
+The C# port in the `Pretext` project, using the `Pretext.Uno` namespace, preserves the TypeScript API shape and most of the semantic behavior, but it is not a literal transliteration of every low-level optimization.
 
 ### 5.1 Public API parity
 
