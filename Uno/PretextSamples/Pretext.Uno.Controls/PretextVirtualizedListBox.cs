@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using Pretext.Uno;
+using Pretext.LayoutFramework;
 
 namespace Pretext.Uno.Controls;
 

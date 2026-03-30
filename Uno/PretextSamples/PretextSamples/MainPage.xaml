@@ -11,8 +11,13 @@
                     IsPaneToggleButtonVisible="True"
                     PaneDisplayMode="Left"
                     SelectionChanged="OnSelectionChanged">
-      <NavigationView.MenuItems>
+        <NavigationView.MenuItems>
         <NavigationViewItem Content="Overview" Tag="overview" Icon="Home" />
+        <NavigationViewItem Content="Two-Pass Panel" Tag="two-pass-panel" Icon="Library" />
+        <NavigationViewItem Content="Two-Pass Control" Tag="two-pass-control" Icon="Document" />
+        <NavigationViewItem Content="Shared Controls" Tag="shared-controls" Icon="AllApps" />
+        <NavigationViewItem Content="Shared Items" Tag="shared-items" Icon="Preview" />
+        <NavigationViewItem Content="Two-Pass Repeater" Tag="two-pass-repeater" Icon="Mail" />
         <NavigationViewItem Content="Accordion" Tag="accordion" Icon="Bullets" />
         <NavigationViewItem Content="Bubbles" Tag="bubbles" Icon="Comment" />
         <NavigationViewItem Content="Masonry" Tag="masonry" Icon="Library" />

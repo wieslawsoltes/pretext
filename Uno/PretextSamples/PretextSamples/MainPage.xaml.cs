@@ -8,6 +8,11 @@ public sealed partial class MainPage : Page
     private readonly Dictionary<string, Func<FrameworkElement>> _sampleFactories = new(StringComparer.Ordinal)
     {
         ["overview"] = static () => new OverviewSampleView(),
+        ["two-pass-panel"] = static () => new TwoPassLayoutSampleView(),
+        ["two-pass-control"] = static () => new TwoPassControlSampleView(),
+        ["shared-controls"] = static () => new SharedControlSamplesView(),
+        ["shared-items"] = static () => new SharedItemSamplesView(),
+        ["two-pass-repeater"] = static () => new TwoPassRepeaterSampleView(),
         ["accordion"] = static () => new AccordionSampleView(),
         ["bubbles"] = static () => new BubblesSampleView(),
         ["masonry"] = static () => new MasonrySampleView(),

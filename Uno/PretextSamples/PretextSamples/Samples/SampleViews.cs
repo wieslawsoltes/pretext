@@ -32,6 +32,11 @@ public sealed class OverviewSampleView : UserControl
             "This port keeps the library-style API shape from the original project and recreates the demo surface in native Uno views. The pages below focus on predicted line counts, shrinkwrap widths, manual line routing, and custom editorial geometry."));
 
         var cards = new StackPanel { Spacing = 16 };
+        cards.Children.Add(BuildFeatureCard("Two-Pass Panel", "A reusable LayoutPanel adapter fingerprints semantic input, prepares panel metadata once, and re-solves responsive card geometry on resize."));
+        cards.Children.Add(BuildFeatureCard("Two-Pass Control", "A reusable control host arranges keyed child controls from a prepared slot model, so compound cards can shift between stacked and split modes without nested Grid logic."));
+        cards.Children.Add(BuildFeatureCard("Shared Controls", "Framework-neutral sample definitions for a mail row and note card are hosted in Uno through the same control layout adapter used elsewhere in the browser."));
+        cards.Children.Add(BuildFeatureCard("Shared Items", "Framework-neutral wrap and masonry item definitions now feed the reusable virtualizing adapters, including sparse viewport selection for shortest-column masonry."));
+        cards.Children.Add(BuildFeatureCard("Two-Pass Repeater", "A reusable VirtualizingLayout adapter feeds exact non-uniform row geometry into ItemsRepeater while the shared core owns fingerprints, prepared items, and viewport queries."));
         cards.Children.Add(BuildFeatureCard("Accordion", "Predicted text heights drive section metadata without measuring the visible layout tree."));
         cards.Children.Add(BuildFeatureCard("Bubbles", "Binary-search shrinkwrap produces tighter multiline chat bubbles than width-to-widest-line sizing."));
         cards.Children.Add(BuildFeatureCard("Masonry", "Card heights come from the layout engine, so the grid can place content before the UI tree measures it."));
