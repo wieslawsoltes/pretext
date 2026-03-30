@@ -7,35 +7,28 @@ namespace Pretext.Uno;
 
 public static partial class PretextLayout
 {
-    private static readonly Regex FontSizeRegex = new(@"(\d+(?:\.\d+)?)\s*px", RegexOptions.Compiled);
-
-    private static readonly HashSet<string> KinsokuStart = new(StringComparer.Ordinal)
-    {
-        "\uFF0C", "\uFF0E", "\uFF01", "\uFF1A", "\uFF1B", "\uFF1F", "\u3001", "\u3002",
-        "\u30FB", "\uFF09", "\u3015", "\u3009", "\u300B", "\u300D", "\u300F", "\u3011",
-        "\u3017", "\u3019", "\u301B", "\u30FC", "\u3005", "\u303B", "\u309D", "\u309E",
-        "\u30FD", "\u30FE",
-    };
-
-    private static readonly HashSet<string> KinsokuEnd = new(StringComparer.Ordinal)
-    {
-        "\"", "(", "[", "{", "“", "‘", "«", "‹", "\uFF08", "\u3014", "\u3008", "\u300A",
-        "\u300C", "\u300E", "\u3010", "\u3016", "\u3018", "\u301A",
-    };
-
-    private static readonly HashSet<string> LeftStickyPunctuation = new(StringComparer.Ordinal)
-    {
-        ".", ",", "!", "?", ":", ";", "\u060C", "\u061B", "\u061F", "\u0964", "\u0965",
-        "\u104A", "\u104B", "\u104C", "\u104D", "\u104F", ")", "]", "}", "%", "\"",
-        "”", "’", "»", "›", "…",
-    };
-
-    private static readonly HashSet<string> ClosingQuotes = new(StringComparer.Ordinal)
-    {
-        "”", "’", "»", "›", "\u300D", "\u300F", "\u3011", "\u300B", "\u3009", "\u3015", "\uFF09",
-    };
-
     private static readonly HashSet<char> NumericJoiners = ['-', ':', '/', '×', ',', '.', '+', '\u2013', '\u2014'];
+
+    [GeneratedRegex(@"(\d+(?:\.\d+)?)\s*px", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex FontSizeRegex();
+
+    private static EngineProfile GetEngineProfile()
+    {
+        if (_cachedEngineProfile is { } cached)
+        {
+            return cached;
+        }
+
+        // This port measures and renders through the same local text stack, so we keep
+        // the stable Skia/Desktop defaults while caching the profile the same way TS does.
+        _cachedEngineProfile = new EngineProfile(
+            LineFitEpsilon: 0.005,
+            CarryCjkAfterClosingQuote: true,
+            PreferPrefixWidthsForBreakableRuns: false,
+            PreferEarlySoftHyphenBreak: false);
+
+        return _cachedEngineProfile.Value;
+    }
 
     private static IReadOnlyList<string> SplitMeasuredCjkRun(string text, bool carryCjkAfterClosingQuote)
     {
@@ -69,30 +62,69 @@ public static partial class PretextLayout
 
     private static bool IsLeftStickyCluster(string text)
     {
-        return text.Length > 0 && text.All(ch => LeftStickyPunctuation.Contains(ch.ToString()));
+        if (text.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var ch in text)
+        {
+            if (!LeftStickyPunctuationChars.Contains(ch))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsCjkLineStartProhibited(string text)
     {
-        return text.Length > 0 && text.All(ch => KinsokuStart.Contains(ch.ToString()) || LeftStickyPunctuation.Contains(ch.ToString()));
+        if (text.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var ch in text)
+        {
+            if (!KinsokuStartChars.Contains(ch) && !LeftStickyPunctuationChars.Contains(ch))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsForwardStickyCluster(string text)
     {
-        return text.Length > 0 && text.All(ch => KinsokuEnd.Contains(ch.ToString()) || ch is '\'' or '’');
+        if (text.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var ch in text)
+        {
+            if (!KinsokuEndChars.Contains(ch) && ch is not '\'' and not '’')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool EndsWithClosingQuote(string text)
     {
         for (var index = text.Length - 1; index >= 0; index--)
         {
-            var ch = text[index].ToString();
-            if (ClosingQuotes.Contains(ch))
+            var ch = text[index];
+            if (ClosingQuotesChars.Contains(ch))
             {
                 return true;
             }
 
-            if (!LeftStickyPunctuation.Contains(ch))
+            if (!LeftStickyPunctuationChars.Contains(ch))
             {
                 return false;
             }
@@ -157,7 +189,7 @@ public static partial class PretextLayout
             SpaceWidth = spaceWidth;
             HyphenWidth = hyphenWidth;
             TabStopAdvance = spaceWidth * 8;
-            SegmentCache = new Dictionary<MeasurementCacheKey, PreparedSegment>();
+            SegmentCache = new Dictionary<MeasurementCacheKey, MeasuredSegment>();
             MeasureTextOverride = measureTextOverride;
         }
 
@@ -171,7 +203,7 @@ public static partial class PretextLayout
 
         public double TabStopAdvance { get; }
 
-        public Dictionary<MeasurementCacheKey, PreparedSegment> SegmentCache { get; }
+        public Dictionary<MeasurementCacheKey, MeasuredSegment> SegmentCache { get; }
 
         private Func<string, string, double>? MeasureTextOverride { get; }
 
@@ -195,7 +227,7 @@ public static partial class PretextLayout
             return new FontState(font, skFont, spaceWidth, hyphenWidth, measureTextOverride);
         }
 
-        public PreparedSegment MeasureSegment(string text, SegmentBreakKind kind, bool isBreakableRun)
+        public MeasuredSegment MeasureSegment(string text, SegmentBreakKind kind, bool isBreakableRun)
         {
             var cacheKey = new MeasurementCacheKey(text, kind, isBreakableRun);
             if (SegmentCache.TryGetValue(cacheKey, out var cached))
@@ -203,21 +235,29 @@ public static partial class PretextLayout
                 return cached;
             }
 
-            var graphemes = GetTextElements(text);
+            double[]? graphemeWidths = null;
             double[]? prefixWidths = null;
-            if (graphemes.Length > 1)
+            if (isBreakableRun)
             {
-                prefixWidths = new double[graphemes.Length];
-                var prefix = new StringBuilder();
-                for (var i = 0; i < graphemes.Length; i++)
+                var graphemes = GetTextElements(text);
+                if (graphemes.Length > 1)
                 {
-                    prefix.Append(graphemes[i]);
-                    prefixWidths[i] = MeasureText(prefix.ToString());
+                    graphemeWidths = new double[graphemes.Length];
+                    prefixWidths = new double[graphemes.Length];
+                    var prefixLength = 0;
+                    for (var i = 0; i < graphemes.Length; i++)
+                    {
+                        prefixLength += graphemes[i].Length;
+                        prefixWidths[i] = MeasureText(text.AsSpan(0, prefixLength));
+                        graphemeWidths[i] = i == 0
+                            ? prefixWidths[i]
+                            : prefixWidths[i] - prefixWidths[i - 1];
+                    }
                 }
             }
 
             var width = MeasureText(text);
-            var segment = new PreparedSegment(text, kind, isBreakableRun, width, graphemes, prefixWidths);
+            var segment = new MeasuredSegment(text, kind, isBreakableRun, width, graphemeWidths, prefixWidths);
             SegmentCache[cacheKey] = segment;
             return segment;
         }
@@ -231,33 +271,38 @@ public static partial class PretextLayout
         {
             return MeasureTextOverride?.Invoke(text, Font) ?? SkFont!.MeasureText(text);
         }
+
+        private double MeasureText(ReadOnlySpan<char> text)
+        {
+            if (text.IsEmpty)
+            {
+                return 0;
+            }
+
+            return MeasureTextOverride?.Invoke(text.ToString(), Font) ?? SkFont!.MeasureText(text);
+        }
     }
 
     private readonly record struct FontSpec(float Size, string PrimaryFamily, SKFontStyle FontStyle)
     {
         public static FontSpec Parse(string font)
         {
-            var match = FontSizeRegex.Match(font);
+            var match = FontSizeRegex().Match(font);
             if (!match.Success)
             {
                 return new FontSpec(16, "Arial", SKFontStyle.Normal);
             }
 
             var size = float.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
-            var beforeSize = font[..match.Index];
-            var afterSize = font[(match.Index + match.Length)..].Trim();
-            if (afterSize.StartsWith("/", StringComparison.Ordinal))
+            var beforeSize = font.AsSpan(0, match.Index);
+            var afterSize = font.AsSpan(match.Index + match.Length).Trim();
+            if (!afterSize.IsEmpty && afterSize[0] == '/')
             {
                 var nextSpace = afterSize.IndexOf(' ');
-                afterSize = nextSpace >= 0 ? afterSize[(nextSpace + 1)..].Trim() : string.Empty;
+                afterSize = nextSpace >= 0 ? afterSize[(nextSpace + 1)..].Trim() : ReadOnlySpan<char>.Empty;
             }
 
-            var families = afterSize
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(static family => family.Trim().Trim('"', '\''))
-                .Where(static family => !string.IsNullOrWhiteSpace(family))
-                .ToArray();
-            var primaryFamily = families.FirstOrDefault() ?? "Arial";
+            var primaryFamily = ExtractPrimaryFamily(afterSize);
 
             if (string.Equals(primaryFamily, "sans-serif", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(primaryFamily, "system-ui", StringComparison.OrdinalIgnoreCase))
@@ -274,26 +319,67 @@ public static partial class PretextLayout
                 primaryFamily = "Menlo";
             }
 
-            var lowered = beforeSize.ToLowerInvariant();
-            var italic = lowered.Contains("italic", StringComparison.Ordinal) || lowered.Contains("oblique", StringComparison.Ordinal);
+            var italic = false;
             var weight = 400;
-            foreach (var token in lowered.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            var scan = beforeSize;
+            while (!scan.IsEmpty)
             {
-                if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                var nextSeparator = scan.IndexOf(' ');
+                var token = (nextSeparator >= 0 ? scan[..nextSeparator] : scan).Trim();
+                if (!token.IsEmpty)
                 {
-                    weight = parsed;
+                    if (token.Equals("italic", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("oblique", StringComparison.OrdinalIgnoreCase))
+                    {
+                        italic = true;
+                    }
+
+                    if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                    {
+                        weight = parsed;
+                        break;
+                    }
+
+                    if (token.Equals("bold", StringComparison.OrdinalIgnoreCase))
+                    {
+                        weight = 700;
+                    }
+                }
+
+                if (nextSeparator < 0)
+                {
                     break;
                 }
 
-                if (token == "bold")
-                {
-                    weight = 700;
-                }
+                scan = scan[(nextSeparator + 1)..];
             }
 
             var styleWeight = weight >= 700 ? SKFontStyleWeight.Bold : weight >= 500 ? SKFontStyleWeight.Medium : SKFontStyleWeight.Normal;
             var slant = italic ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright;
             return new FontSpec(size, primaryFamily, new SKFontStyle(styleWeight, SKFontStyleWidth.Normal, slant));
+        }
+
+        private static string ExtractPrimaryFamily(ReadOnlySpan<char> familyList)
+        {
+            if (familyList.IsEmpty)
+            {
+                return "Arial";
+            }
+
+            var commaIndex = familyList.IndexOf(',');
+            var primary = TrimMatchingQuotes((commaIndex >= 0 ? familyList[..commaIndex] : familyList).Trim());
+            return primary.IsEmpty ? "Arial" : primary.ToString();
+        }
+
+        private static ReadOnlySpan<char> TrimMatchingQuotes(ReadOnlySpan<char> value)
+        {
+            if (value.Length >= 2 &&
+                ((value[0] == '"' && value[^1] == '"') || (value[0] == '\'' && value[^1] == '\'')))
+            {
+                return value[1..^1].Trim();
+            }
+
+            return value;
         }
     }
 }

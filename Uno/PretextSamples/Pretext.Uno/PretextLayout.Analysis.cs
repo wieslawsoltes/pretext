@@ -6,11 +6,31 @@ namespace Pretext.Uno;
 
 public static partial class PretextLayout
 {
-    private static readonly Regex UrlSchemeSegmentRegex = new("^[A-Za-z][A-Za-z0-9+.-]*:$", RegexOptions.Compiled);
-    private static readonly Regex UrlSchemeBareSegmentRegex = new("^[A-Za-z][A-Za-z0-9+.-]*$", RegexOptions.Compiled);
     private static readonly HashSet<char> ForwardStickyGlue = ['\'', '’'];
     private static readonly HashSet<char> ArabicNoSpaceTrailingPunctuation = [':', '.', '\u060C', '\u061B'];
     private static readonly HashSet<char> MyanmarMedialGlue = ['\u104F'];
+    private static readonly HashSet<char> KinsokuStartChars =
+    [
+        '\uFF0C', '\uFF0E', '\uFF01', '\uFF1A', '\uFF1B', '\uFF1F', '\u3001', '\u3002',
+        '\u30FB', '\uFF09', '\u3015', '\u3009', '\u300B', '\u300D', '\u300F', '\u3011',
+        '\u3017', '\u3019', '\u301B', '\u30FC', '\u3005', '\u303B', '\u309D', '\u309E',
+        '\u30FD', '\u30FE',
+    ];
+    private static readonly HashSet<char> KinsokuEndChars =
+    [
+        '"', '(', '[', '{', '“', '‘', '«', '‹', '\uFF08', '\u3014', '\u3008', '\u300A',
+        '\u300C', '\u300E', '\u3010', '\u3016', '\u3018', '\u301A',
+    ];
+    private static readonly HashSet<char> LeftStickyPunctuationChars =
+    [
+        '.', ',', '!', '?', ':', ';', '\u060C', '\u061B', '\u061F', '\u0964', '\u0965',
+        '\u104A', '\u104B', '\u104C', '\u104D', '\u104F', ')', ']', '}', '%', '"',
+        '”', '’', '»', '›', '…',
+    ];
+    private static readonly HashSet<char> ClosingQuotesChars =
+    [
+        '”', '’', '»', '›', '\u300D', '\u300F', '\u3011', '\u300B', '\u3009', '\u3015', '\uFF09',
+    ];
 
     private readonly record struct EngineProfile(
         double LineFitEpsilon,
@@ -23,17 +43,15 @@ public static partial class PretextLayout
         bool PreserveOrdinarySpaces,
         bool PreserveHardBreaks);
 
+    private readonly record struct WordSegment(string Text, bool IsWordLike, int Start);
+
     private readonly record struct AnalysisToken(string Text, SegmentBreakKind Kind, bool IsWordLike);
 
-    private static EngineProfile GetEngineProfile()
-    {
-        // Favor the Chromium-flavored defaults used by the public demos.
-        return new EngineProfile(
-            LineFitEpsilon: 0.005,
-            CarryCjkAfterClosingQuote: true,
-            PreferPrefixWidthsForBreakableRuns: false,
-            PreferEarlySoftHyphenBreak: false);
-    }
+    [GeneratedRegex("^[A-Za-z][A-Za-z0-9+.-]*:$", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex UrlSchemeSegmentRegex();
+
+    [GeneratedRegex("^[A-Za-z][A-Za-z0-9+.-]*$", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex UrlSchemeBareSegmentRegex();
 
     private static WhiteSpaceProfile GetWhiteSpaceProfile(WhiteSpaceMode whiteSpace)
     {
@@ -110,6 +128,16 @@ public static partial class PretextLayout
     private static List<AnalysisToken> BuildInitialTokens(string text, WhiteSpaceProfile whiteSpaceProfile)
     {
         var tokens = new List<AnalysisToken>();
+        if (TryEnumerateLocaleAwareWordSegments(text, out var segments))
+        {
+            foreach (var segment in segments)
+            {
+                tokens.AddRange(SplitSegmentByBreakKind(segment.Text, whiteSpaceProfile));
+            }
+
+            return tokens;
+        }
+
         SegmentBreakKind? currentKind = null;
         var currentWordLike = false;
         var builder = new StringBuilder();
@@ -130,7 +158,7 @@ public static partial class PretextLayout
         foreach (var element in EnumerateTextElements(text))
         {
             var kind = ClassifySegmentBreakTextElement(element, whiteSpaceProfile);
-            var isWordLike = kind == SegmentBreakKind.Text && IsWordLikeTextElement(element);
+            var isWordLike = kind == SegmentBreakKind.Text && IsWordLikeText(element);
 
             if (currentKind is not null &&
                 currentKind == kind &&
@@ -149,6 +177,46 @@ public static partial class PretextLayout
 
         Flush();
         return tokens;
+    }
+
+    private static IEnumerable<AnalysisToken> SplitSegmentByBreakKind(string segment, WhiteSpaceProfile whiteSpaceProfile)
+    {
+        SegmentBreakKind? currentKind = null;
+        var builder = new StringBuilder();
+
+        foreach (var element in EnumerateTextElements(segment))
+        {
+            var kind = ClassifySegmentBreakTextElement(element, whiteSpaceProfile);
+
+            if (currentKind is not null &&
+                currentKind == kind)
+            {
+                builder.Append(element);
+                continue;
+            }
+
+            if (builder.Length > 0 && currentKind is not null)
+            {
+                var text = builder.ToString();
+                yield return new AnalysisToken(
+                    text,
+                    currentKind.Value,
+                    currentKind == SegmentBreakKind.Text && IsWordLikeText(text));
+            }
+
+            builder.Clear();
+            builder.Append(element);
+            currentKind = kind;
+        }
+
+        if (builder.Length > 0 && currentKind is not null)
+        {
+            var text = builder.ToString();
+            yield return new AnalysisToken(
+                text,
+                currentKind.Value,
+                currentKind == SegmentBreakKind.Text && IsWordLikeText(text));
+        }
     }
 
     private static List<AnalysisToken> BuildMergedTokens(
@@ -545,27 +613,51 @@ public static partial class PretextLayout
         {
             if (token.Kind == SegmentBreakKind.Text && token.Text.Contains('-', StringComparison.Ordinal))
             {
-                var parts = token.Text.Split('-', StringSplitOptions.None);
-                var shouldSplit = parts.Length > 1;
-                foreach (var part in parts)
+                var text = token.Text.AsSpan();
+                var start = 0;
+                var partCount = 0;
+                var shouldSplit = false;
+
+                while (start <= text.Length)
                 {
-                    if (!shouldSplit)
+                    var relativeHyphen = text[start..].IndexOf('-');
+                    var end = relativeHyphen >= 0 ? start + relativeHyphen : text.Length;
+                    var part = text[start..end];
+
+                    if (part.IsEmpty || !SegmentContainsDecimalDigit(part) || !IsNumericRunSegment(part))
                     {
+                        shouldSplit = false;
                         break;
                     }
 
-                    if (part.Length == 0 || !SegmentContainsDecimalDigit(part) || !IsNumericRunSegment(part))
+                    partCount++;
+                    if (relativeHyphen < 0)
                     {
-                        shouldSplit = false;
+                        shouldSplit = partCount > 1;
+                        break;
                     }
+
+                    start = end + 1;
                 }
 
                 if (shouldSplit)
                 {
-                    for (var index = 0; index < parts.Length; index++)
+                    start = 0;
+                    while (start <= text.Length)
                     {
-                        var splitText = index < parts.Length - 1 ? $"{parts[index]}-" : parts[index];
+                        var relativeHyphen = text[start..].IndexOf('-');
+                        var end = relativeHyphen >= 0 ? start + relativeHyphen : text.Length;
+                        var splitText = relativeHyphen >= 0
+                            ? text[start..(end + 1)].ToString()
+                            : text[start..].ToString();
                         splitTokens.Add(new AnalysisToken(splitText, SegmentBreakKind.Text, true));
+
+                        if (relativeHyphen < 0)
+                        {
+                            break;
+                        }
+
+                        start = end + 1;
                     }
 
                     continue;
@@ -728,7 +820,7 @@ public static partial class PretextLayout
         return SegmentBreakKind.Text;
     }
 
-    private static bool IsWordLikeTextElement(string element)
+    private static bool IsWordLikeText(string element)
     {
         var sawWord = false;
         foreach (var rune in element.EnumerateRunes())
@@ -794,7 +886,7 @@ public static partial class PretextLayout
             return true;
         }
 
-        if (UrlSchemeSegmentRegex.IsMatch(text) &&
+        if (UrlSchemeSegmentRegex().IsMatch(text) &&
             index + 1 < tokens.Count &&
             tokens[index + 1].Kind == SegmentBreakKind.Text &&
             tokens[index + 1].Text == "//")
@@ -802,7 +894,7 @@ public static partial class PretextLayout
             return true;
         }
 
-        return UrlSchemeBareSegmentRegex.IsMatch(text) &&
+        return UrlSchemeBareSegmentRegex().IsMatch(text) &&
                index + 1 < tokens.Count &&
                tokens[index + 1].Kind == SegmentBreakKind.Text &&
                tokens[index + 1].Text.StartsWith("://", StringComparison.Ordinal);
@@ -815,6 +907,9 @@ public static partial class PretextLayout
     }
 
     private static bool SegmentContainsDecimalDigit(string text)
+        => SegmentContainsDecimalDigit(text.AsSpan());
+
+    private static bool SegmentContainsDecimalDigit(ReadOnlySpan<char> text)
     {
         foreach (var rune in text.EnumerateRunes())
         {
@@ -828,8 +923,11 @@ public static partial class PretextLayout
     }
 
     private static bool IsNumericRunSegment(string text)
+        => IsNumericRunSegment(text.AsSpan());
+
+    private static bool IsNumericRunSegment(ReadOnlySpan<char> text)
     {
-        if (string.IsNullOrEmpty(text))
+        if (text.IsEmpty)
         {
             return false;
         }
@@ -849,8 +947,11 @@ public static partial class PretextLayout
     }
 
     private static bool IsAsciiPunctuationChainSegment(string text)
+        => IsAsciiPunctuationChainSegment(text.AsSpan());
+
+    private static bool IsAsciiPunctuationChainSegment(ReadOnlySpan<char> text)
     {
-        if (text.Length == 0)
+        if (text.IsEmpty)
         {
             return false;
         }
@@ -873,8 +974,11 @@ public static partial class PretextLayout
     }
 
     private static bool HasAsciiPunctuationChainTrailingJoiners(string text)
+        => HasAsciiPunctuationChainTrailingJoiners(text.AsSpan());
+
+    private static bool HasAsciiPunctuationChainTrailingJoiners(ReadOnlySpan<char> text)
     {
-        if (text.Length == 0)
+        if (text.IsEmpty)
         {
             return false;
         }
@@ -949,7 +1053,7 @@ public static partial class PretextLayout
                 continue;
             }
 
-            if (KinsokuEnd.Contains(ch.ToString()) || LeftStickyPunctuation.Contains(ch.ToString()) || ForwardStickyGlue.Contains(ch))
+            if (KinsokuEndChars.Contains(ch) || LeftStickyPunctuationChars.Contains(ch) || ForwardStickyGlue.Contains(ch))
             {
                 sawQuote = true;
                 continue;
@@ -971,7 +1075,7 @@ public static partial class PretextLayout
         var sawPunctuation = false;
         foreach (var ch in segment)
         {
-            if (LeftStickyPunctuation.Contains(ch.ToString()))
+            if (LeftStickyPunctuationChars.Contains(ch))
             {
                 sawPunctuation = true;
                 continue;
@@ -997,8 +1101,7 @@ public static partial class PretextLayout
 
         foreach (var ch in segment)
         {
-            var glyph = ch.ToString();
-            if (!KinsokuStart.Contains(glyph) && !LeftStickyPunctuation.Contains(glyph))
+            if (!KinsokuStartChars.Contains(ch) && !LeftStickyPunctuationChars.Contains(ch))
             {
                 return false;
             }
@@ -1021,7 +1124,7 @@ public static partial class PretextLayout
 
         foreach (var ch in segment)
         {
-            if (KinsokuEnd.Contains(ch.ToString()) || ForwardStickyGlue.Contains(ch) || IsCombiningMark(ch))
+            if (KinsokuEndChars.Contains(ch) || ForwardStickyGlue.Contains(ch) || IsCombiningMark(ch))
             {
                 continue;
             }
@@ -1092,7 +1195,7 @@ public static partial class PretextLayout
                 continue;
             }
 
-            if (KinsokuEnd.Contains(ch.ToString()) || ForwardStickyGlue.Contains(ch))
+            if (KinsokuEndChars.Contains(ch) || ForwardStickyGlue.Contains(ch))
             {
                 splitIndex--;
                 continue;
@@ -1119,8 +1222,8 @@ public static partial class PretextLayout
         var splitIndex = 0;
         while (splitIndex < text.Length)
         {
-            var ch = text[splitIndex].ToString();
-            if (!KinsokuStart.Contains(ch) && !LeftStickyPunctuation.Contains(ch))
+            var ch = text[splitIndex];
+            if (!KinsokuStartChars.Contains(ch) && !LeftStickyPunctuationChars.Contains(ch))
             {
                 break;
             }

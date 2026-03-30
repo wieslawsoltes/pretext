@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
 using System.Diagnostics;
 
 namespace Pretext.Uno;
@@ -43,84 +44,17 @@ public sealed record LayoutLineRange(double Width, LayoutCursor Start, LayoutCur
 
 public sealed record LayoutLinesResult(int LineCount, double Height, IReadOnlyList<LayoutLine> Lines);
 
-internal sealed class PreparedSegment
+internal readonly record struct MeasuredSegment(
+    string Text,
+    SegmentBreakKind Kind,
+    bool IsBreakableRun,
+    double Width,
+    double[]? BreakableWidths,
+    double[]? BreakablePrefixWidths);
+
+internal sealed class SegmentTextCache
 {
-    public PreparedSegment(string text, SegmentBreakKind kind, bool isBreakableRun, double width, string[] graphemes, double[]? prefixWidths)
-    {
-        Text = text;
-        Kind = kind;
-        IsBreakableRun = isBreakableRun;
-        Width = width;
-        Graphemes = graphemes;
-        PrefixWidths = prefixWidths;
-    }
-
-    public string Text { get; }
-
-    public SegmentBreakKind Kind { get; }
-
-    public bool IsBreakableRun { get; }
-
-    public double Width { get; }
-
-    public string[] Graphemes { get; }
-
-    public double[]? PrefixWidths { get; }
-
-    public int GraphemeCount => Graphemes.Length;
-
-    public double GetWidthFrom(int startIndex)
-    {
-        if (startIndex <= 0)
-        {
-            return Width;
-        }
-
-        return Width - GetPrefixWidth(startIndex - 1);
-    }
-
-    public double GetWidthRange(int startIndex, int count)
-    {
-        if (count <= 0)
-        {
-            return 0;
-        }
-
-        if (PrefixWidths is null)
-        {
-            return Width;
-        }
-
-        var endIndex = startIndex + count - 1;
-        var end = GetPrefixWidth(endIndex);
-        var start = startIndex > 0 ? GetPrefixWidth(startIndex - 1) : 0;
-        return end - start;
-    }
-
-    public string GetSlice(int startIndex, int endIndexExclusive)
-    {
-        if (startIndex <= 0 && endIndexExclusive >= GraphemeCount)
-        {
-            return Text;
-        }
-
-        if (startIndex >= endIndexExclusive)
-        {
-            return string.Empty;
-        }
-
-        return string.Concat(Graphemes.Skip(startIndex).Take(endIndexExclusive - startIndex));
-    }
-
-    private double GetPrefixWidth(int index)
-    {
-        if (PrefixWidths is null)
-        {
-            return Width;
-        }
-
-        return PrefixWidths[index];
-    }
+    public Dictionary<int, string[]> GraphemesBySegmentIndex { get; } = new();
 }
 
 public class PreparedText
@@ -128,15 +62,25 @@ public class PreparedText
     internal PreparedText(
         string font,
         WhiteSpaceMode whiteSpace,
-        IReadOnlyList<PreparedSegment> segments,
+        double[] widths,
+        double[] lineEndFitAdvances,
+        double[] lineEndPaintAdvances,
+        SegmentBreakKind[] kinds,
+        double[]?[] breakableWidths,
+        double[]?[] breakablePrefixWidths,
         double hyphenWidth,
         double tabStopAdvance,
-        IReadOnlyList<PreparedLineChunk> chunks,
+        PreparedLineChunk[] chunks,
         bool simpleLineWalkFastPath)
     {
         Font = font;
         WhiteSpace = whiteSpace;
-        SegmentsInternal = segments;
+        WidthsInternal = widths;
+        LineEndFitAdvancesInternal = lineEndFitAdvances;
+        LineEndPaintAdvancesInternal = lineEndPaintAdvances;
+        KindsInternal = kinds;
+        BreakableWidthsInternal = breakableWidths;
+        BreakablePrefixWidthsInternal = breakablePrefixWidths;
         DiscretionaryHyphenWidth = hyphenWidth;
         TabStopAdvance = tabStopAdvance;
         ChunksInternal = chunks;
@@ -147,9 +91,19 @@ public class PreparedText
 
     public WhiteSpaceMode WhiteSpace { get; }
 
-    internal IReadOnlyList<PreparedSegment> SegmentsInternal { get; }
+    internal double[] WidthsInternal { get; }
 
-    internal IReadOnlyList<PreparedLineChunk> ChunksInternal { get; }
+    internal double[] LineEndFitAdvancesInternal { get; }
+
+    internal double[] LineEndPaintAdvancesInternal { get; }
+
+    internal SegmentBreakKind[] KindsInternal { get; }
+
+    internal double[]?[] BreakableWidthsInternal { get; }
+
+    internal double[]?[] BreakablePrefixWidthsInternal { get; }
+
+    internal PreparedLineChunk[] ChunksInternal { get; }
 
     internal bool SimpleLineWalkFastPathInternal { get; }
 
@@ -163,20 +117,19 @@ public sealed class PreparedTextWithSegments : PreparedText
     internal PreparedTextWithSegments(
         string font,
         WhiteSpaceMode whiteSpace,
-        IReadOnlyList<PreparedSegment> segments,
         double hyphenWidth,
         double tabStopAdvance,
-        IReadOnlyList<string> segmentTexts,
-        IReadOnlyList<double> widths,
-        IReadOnlyList<double> lineEndFitAdvances,
-        IReadOnlyList<double> lineEndPaintAdvances,
-        IReadOnlyList<SegmentBreakKind> kinds,
-        IReadOnlyList<IReadOnlyList<double>?> breakableWidths,
-        IReadOnlyList<IReadOnlyList<double>?> breakablePrefixWidths,
-        IReadOnlyList<PreparedLineChunk> chunks,
+        string[] segmentTexts,
+        double[] widths,
+        double[] lineEndFitAdvances,
+        double[] lineEndPaintAdvances,
+        SegmentBreakKind[] kinds,
+        double[]?[] breakableWidths,
+        double[]?[] breakablePrefixWidths,
+        PreparedLineChunk[] chunks,
         bool simpleLineWalkFastPath,
-        IReadOnlyList<sbyte>? segmentLevels)
-        : base(font, whiteSpace, segments, hyphenWidth, tabStopAdvance, chunks, simpleLineWalkFastPath)
+        sbyte[]? segmentLevels)
+        : base(font, whiteSpace, widths, lineEndFitAdvances, lineEndPaintAdvances, kinds, breakableWidths, breakablePrefixWidths, hyphenWidth, tabStopAdvance, chunks, simpleLineWalkFastPath)
     {
         Segments = segmentTexts;
         Widths = widths;
@@ -200,9 +153,9 @@ public sealed class PreparedTextWithSegments : PreparedText
 
     public IReadOnlyList<SegmentBreakKind> Kinds { get; }
 
-    public IReadOnlyList<IReadOnlyList<double>?> BreakableWidths { get; }
+    public IReadOnlyList<double[]?> BreakableWidths { get; }
 
-    public IReadOnlyList<IReadOnlyList<double>?> BreakablePrefixWidths { get; }
+    public IReadOnlyList<double[]?> BreakablePrefixWidths { get; }
 
     public IReadOnlyList<PreparedLineChunk> Chunks { get; }
 
@@ -215,8 +168,10 @@ public static partial class PretextLayout
 {
     private static readonly Dictionary<string, FontState> FontStates = new(StringComparer.Ordinal);
     private static readonly object FontStateGate = new();
+    private static ConditionalWeakTable<PreparedTextWithSegments, SegmentTextCache> _segmentTextCaches = new();
     private static string? _locale;
     private static Func<string, string, double>? _measureTextOverride;
+    private static EngineProfile? _cachedEngineProfile;
 
     public static PreparedText Prepare(string text, string font, PrepareOptions? options = null)
     {
@@ -244,7 +199,7 @@ public static partial class PretextLayout
             foreach (var segment in ExpandPreparedSegments(token, fontState, engineProfile))
             {
                 preparedSegments++;
-                if (segment.IsBreakableRun && segment.GraphemeCount > 1)
+                if (segment.IsBreakableRun && segment.BreakableWidths is { Length: > 1 })
                 {
                     breakableSegments++;
                 }
@@ -263,30 +218,15 @@ public static partial class PretextLayout
 
     public static LayoutResult Layout(PreparedText prepared, double maxWidth, double lineHeight)
     {
-        var lineCount = 0;
-        var cursor = new LayoutCursor(0, 0);
-
-        while (TryStepLine(prepared, cursor, maxWidth, out var line))
-        {
-            lineCount++;
-            cursor = line.End;
-        }
-
+        var lineCount = CountPreparedLines(prepared, maxWidth);
         return new LayoutResult(lineCount, lineCount * lineHeight);
     }
 
     public static LayoutLinesResult LayoutWithLines(PreparedTextWithSegments prepared, double maxWidth, double lineHeight)
     {
         var lines = new List<LayoutLine>();
-        var cursor = new LayoutCursor(0, 0);
-
-        while (TryStepLine(prepared, cursor, maxWidth, out var line))
-        {
-            lines.Add(MaterializeLine(prepared, line));
-            cursor = line.End;
-        }
-
-        return new LayoutLinesResult(lines.Count, lines.Count * lineHeight, new ReadOnlyCollection<LayoutLine>(lines));
+        var lineCount = WalkPreparedLines(prepared, maxWidth, line => lines.Add(MaterializeLine(prepared, line)));
+        return new LayoutLinesResult(lineCount, lineCount * lineHeight, new ReadOnlyCollection<LayoutLine>(lines));
     }
 
     public static LayoutLine? LayoutNextLine(PreparedTextWithSegments prepared, LayoutCursor start, double maxWidth)
@@ -300,16 +240,7 @@ public static partial class PretextLayout
     {
         ArgumentNullException.ThrowIfNull(onLine);
 
-        var lineCount = 0;
-        var cursor = new LayoutCursor(0, 0);
-        while (TryStepLine(prepared, cursor, maxWidth, out var line))
-        {
-            lineCount++;
-            onLine(new LayoutLineRange(line.Width, line.Start, line.End));
-            cursor = line.End;
-        }
-
-        return lineCount;
+        return WalkPreparedLines(prepared, maxWidth, line => onLine(new LayoutLineRange(line.Width, line.Start, line.End)));
     }
 
     public static void ClearCache()
@@ -323,6 +254,9 @@ public static partial class PretextLayout
 
             FontStates.Clear();
         }
+
+        _cachedEngineProfile = null;
+        _segmentTextCaches = new ConditionalWeakTable<PreparedTextWithSegments, SegmentTextCache>();
     }
 
     public static void SetLocale(string? locale = null)
@@ -339,29 +273,11 @@ public static partial class PretextLayout
 
     internal static int CountPreparedLinesForTests(PreparedText prepared, double maxWidth)
     {
-        var lineCount = 0;
-        var cursor = new LayoutCursor(0, 0);
-
-        while (TryStepLine(prepared, cursor, maxWidth, out var line))
-        {
-            lineCount++;
-            cursor = line.End;
-        }
-
-        return lineCount;
+        return CountPreparedLines(prepared, maxWidth);
     }
 
     internal static int WalkPreparedLinesForTests(PreparedText prepared, double maxWidth)
     {
-        var walkedLines = 0;
-        var cursor = new LayoutCursor(0, 0);
-
-        while (TryStepLine(prepared, cursor, maxWidth, out var line))
-        {
-            walkedLines++;
-            cursor = line.End;
-        }
-
-        return walkedLines;
+        return WalkPreparedLines(prepared, maxWidth);
     }
 }

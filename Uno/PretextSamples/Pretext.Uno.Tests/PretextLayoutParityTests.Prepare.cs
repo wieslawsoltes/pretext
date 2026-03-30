@@ -380,4 +380,14 @@ public sealed partial class PretextLayoutParityTests
         var latin = PretextLayout.Prepare("hello world", Font);
         Assert.Equal(new LayoutResult(1, LineHeight), PretextLayout.Layout(latin, 200, LineHeight));
     }
+
+    [Fact(DisplayName = "thai locale uses locale-aware word segmentation")]
+    public void Prepare_ThaiLocaleUsesLocaleAwareWordSegmentation()
+    {
+        PretextLayout.SetLocale("th");
+        var prepared = PretextLayout.PrepareWithSegments("ภาษาไทยภาษาไทย", Font);
+        Assert.True(
+            prepared.Segments.Count > 1,
+            $"segments={string.Join("|", prepared.Segments)}");
+    }
 }

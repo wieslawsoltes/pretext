@@ -14,37 +14,40 @@ public static partial class PretextLayout
                 ? new PreparedTextWithSegments(
                     font,
                     options.WhiteSpace,
-                    Array.Empty<PreparedSegment>(),
                     fontState.HyphenWidth,
                     fontState.TabStopAdvance,
-                    Array.Empty<string>(),
-                    Array.Empty<double>(),
-                    Array.Empty<double>(),
-                    Array.Empty<double>(),
-                    Array.Empty<SegmentBreakKind>(),
-                    Array.Empty<IReadOnlyList<double>?>(),
-                    Array.Empty<IReadOnlyList<double>?>(),
-                    Array.Empty<PreparedLineChunk>(),
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
                     true,
                     null)
                 : new PreparedText(
                     font,
                     options.WhiteSpace,
-                    Array.Empty<PreparedSegment>(),
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
                     fontState.HyphenWidth,
                     fontState.TabStopAdvance,
-                    Array.Empty<PreparedLineChunk>(),
+                    [],
                     true);
         }
 
-        var preparedSegments = new List<PreparedSegment>(tokens.Count);
         var segmentTexts = includeSegments ? new List<string>(tokens.Count) : null;
-        var widths = includeSegments ? new List<double>(tokens.Count) : null;
-        var lineEndFitAdvances = includeSegments ? new List<double>(tokens.Count) : null;
-        var lineEndPaintAdvances = includeSegments ? new List<double>(tokens.Count) : null;
-        var kinds = includeSegments ? new List<SegmentBreakKind>(tokens.Count) : null;
-        var breakableWidths = includeSegments ? new List<IReadOnlyList<double>?>(tokens.Count) : null;
-        var breakablePrefixWidths = includeSegments ? new List<IReadOnlyList<double>?>(tokens.Count) : null;
+        var widths = new List<double>(tokens.Count);
+        var lineEndFitAdvances = new List<double>(tokens.Count);
+        var lineEndPaintAdvances = new List<double>(tokens.Count);
+        var kinds = new List<SegmentBreakKind>(tokens.Count);
+        var breakableWidths = new List<double[]?>(tokens.Count);
+        var breakablePrefixWidths = new List<double[]?>(tokens.Count);
         var normalized = new StringBuilder();
         var starts = new List<int>(tokens.Count);
         var simpleLineWalkFastPath = true;
@@ -56,25 +59,25 @@ public static partial class PretextLayout
             {
                 starts.Add(normalized.Length);
                 normalized.Append(segment.Text);
-                preparedSegments.Add(segment);
 
                 simpleLineWalkFastPath &= segment.Kind is SegmentBreakKind.Text or SegmentBreakKind.Space or SegmentBreakKind.ZeroWidthBreak;
 
                 if (includeSegments)
                 {
                     segmentTexts!.Add(segment.Text);
-                    widths!.Add(segment.Width);
-                    lineEndFitAdvances!.Add(GetLineEndFitAdvance(segment, fontState.HyphenWidth));
-                    lineEndPaintAdvances!.Add(GetLineEndPaintAdvance(segment, fontState.HyphenWidth));
-                    kinds!.Add(segment.Kind);
-                    breakableWidths!.Add(GetBreakableWidths(segment));
-                    breakablePrefixWidths!.Add(GetBreakablePrefixWidths(segment));
                 }
+
+                widths.Add(segment.Width);
+                lineEndFitAdvances.Add(GetLineEndFitAdvance(segment, fontState.HyphenWidth));
+                lineEndPaintAdvances.Add(GetLineEndPaintAdvance(segment, fontState.HyphenWidth));
+                kinds.Add(segment.Kind);
+                breakableWidths.Add(segment.BreakableWidths);
+                breakablePrefixWidths.Add(segment.BreakablePrefixWidths);
             }
         }
 
-        var chunks = BuildChunks(preparedSegments);
-        simpleLineWalkFastPath &= chunks.Count <= 1;
+        var chunks = BuildChunks(kinds);
+        simpleLineWalkFastPath &= chunks.Length <= 1;
 
         if (includeSegments)
         {
@@ -82,28 +85,32 @@ public static partial class PretextLayout
             return new PreparedTextWithSegments(
                 font,
                 options.WhiteSpace,
-                preparedSegments.AsReadOnly(),
                 fontState.HyphenWidth,
                 fontState.TabStopAdvance,
-                segmentTexts!.AsReadOnly(),
-                widths!.AsReadOnly(),
-                lineEndFitAdvances!.AsReadOnly(),
-                lineEndPaintAdvances!.AsReadOnly(),
-                kinds!.AsReadOnly(),
-                breakableWidths!.AsReadOnly(),
-                breakablePrefixWidths!.AsReadOnly(),
-                chunks.AsReadOnly(),
+                segmentTexts!.ToArray(),
+                widths.ToArray(),
+                lineEndFitAdvances.ToArray(),
+                lineEndPaintAdvances.ToArray(),
+                kinds.ToArray(),
+                breakableWidths.ToArray(),
+                breakablePrefixWidths.ToArray(),
+                chunks,
                 simpleLineWalkFastPath,
-                levels is null ? null : Array.AsReadOnly(levels));
+                levels);
         }
 
         return new PreparedText(
             font,
             options.WhiteSpace,
-            preparedSegments.AsReadOnly(),
+            widths.ToArray(),
+            lineEndFitAdvances.ToArray(),
+            lineEndPaintAdvances.ToArray(),
+            kinds.ToArray(),
+            breakableWidths.ToArray(),
+            breakablePrefixWidths.ToArray(),
             fontState.HyphenWidth,
             fontState.TabStopAdvance,
-            chunks.AsReadOnly(),
+            chunks,
             simpleLineWalkFastPath);
     }
 
@@ -122,24 +129,24 @@ public static partial class PretextLayout
         }
     }
 
-    private static IEnumerable<PreparedSegment> ExpandPreparedSegments(AnalysisToken token, FontState fontState, EngineProfile profile)
+    private static IEnumerable<MeasuredSegment> ExpandPreparedSegments(AnalysisToken token, FontState fontState, EngineProfile profile)
     {
         switch (token.Kind)
         {
             case SegmentBreakKind.HardBreak:
-                yield return new PreparedSegment(token.Text, token.Kind, false, 0, Array.Empty<string>(), null);
+                yield return new MeasuredSegment(token.Text, token.Kind, false, 0, null, null);
                 yield break;
 
             case SegmentBreakKind.ZeroWidthBreak:
-                yield return new PreparedSegment(token.Text, token.Kind, false, 0, Array.Empty<string>(), null);
+                yield return new MeasuredSegment(token.Text, token.Kind, false, 0, null, null);
                 yield break;
 
             case SegmentBreakKind.SoftHyphen:
-                yield return new PreparedSegment(token.Text, token.Kind, false, 0, Array.Empty<string>(), null);
+                yield return new MeasuredSegment(token.Text, token.Kind, false, 0, null, null);
                 yield break;
 
             case SegmentBreakKind.Tab:
-                yield return new PreparedSegment(token.Text, token.Kind, false, 0, ["\t"], null);
+                yield return new MeasuredSegment(token.Text, token.Kind, false, 0, null, null);
                 yield break;
         }
 
@@ -159,33 +166,7 @@ public static partial class PretextLayout
             isBreakableRun: token.Kind == SegmentBreakKind.Text && token.IsWordLike && token.Text.Length > 1);
     }
 
-    private static IReadOnlyList<double>? GetBreakableWidths(PreparedSegment segment)
-    {
-        if (segment.Kind != SegmentBreakKind.Text || !segment.IsBreakableRun || segment.GraphemeCount <= 1 || segment.PrefixWidths is null)
-        {
-            return null;
-        }
-
-        var widths = new double[segment.GraphemeCount];
-        for (var index = 0; index < widths.Length; index++)
-        {
-            widths[index] = segment.GetWidthRange(index, 1);
-        }
-
-        return Array.AsReadOnly(widths);
-    }
-
-    private static IReadOnlyList<double>? GetBreakablePrefixWidths(PreparedSegment segment)
-    {
-        if (segment.Kind != SegmentBreakKind.Text || !segment.IsBreakableRun || segment.GraphemeCount <= 1 || segment.PrefixWidths is null)
-        {
-            return null;
-        }
-
-        return Array.AsReadOnly(segment.PrefixWidths);
-    }
-
-    private static double GetLineEndFitAdvance(PreparedSegment segment, double hyphenWidth)
+    private static double GetLineEndFitAdvance(MeasuredSegment segment, double hyphenWidth)
     {
         return segment.Kind switch
         {
@@ -199,7 +180,7 @@ public static partial class PretextLayout
         };
     }
 
-    private static double GetLineEndPaintAdvance(PreparedSegment segment, double hyphenWidth)
+    private static double GetLineEndPaintAdvance(MeasuredSegment segment, double hyphenWidth)
     {
         return segment.Kind switch
         {
@@ -212,18 +193,18 @@ public static partial class PretextLayout
         };
     }
 
-    private static List<PreparedLineChunk> BuildChunks(IReadOnlyList<PreparedSegment> segments)
+    private static PreparedLineChunk[] BuildChunks(IReadOnlyList<SegmentBreakKind> kinds)
     {
         var chunks = new List<PreparedLineChunk>();
-        if (segments.Count == 0)
+        if (kinds.Count == 0)
         {
-            return chunks;
+            return [];
         }
 
         var chunkStart = 0;
-        for (var index = 0; index < segments.Count; index++)
+        for (var index = 0; index < kinds.Count; index++)
         {
-            if (segments[index].Kind != SegmentBreakKind.HardBreak)
+            if (kinds[index] != SegmentBreakKind.HardBreak)
             {
                 continue;
             }
@@ -232,7 +213,11 @@ public static partial class PretextLayout
             chunkStart = index + 1;
         }
 
-        chunks.Add(new PreparedLineChunk(chunkStart, segments.Count, segments.Count));
-        return chunks;
+        if (chunkStart < kinds.Count)
+        {
+            chunks.Add(new PreparedLineChunk(chunkStart, kinds.Count, kinds.Count));
+        }
+
+        return chunks.ToArray();
     }
 }
