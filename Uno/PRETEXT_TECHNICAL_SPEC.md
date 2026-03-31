@@ -4,7 +4,7 @@ This document describes the current Pretext architecture across:
 
 - the TypeScript reference engine in `src/`
 - the C# port in `Uno/PretextSamples/Pretext/`
-- the Uno integration layer in `Uno/PretextSamples/Pretext.Uno.Controls/`
+- the Uno sample browser in `Uno/PretextSamples/PretextSamples/`
 
 It is an internal implementation document, not a public API guide. Use `README.md` for public usage examples and `DEVELOPMENT.md` for the current verification workflow.
 
@@ -58,17 +58,14 @@ It also has an explicit `pre-wrap` mode for editor-like input and preserved whit
 | Internal line walker | `Uno/PretextSamples/Pretext/PretextLayout.LineBreak.cs` |
 | Rich-path bidi metadata | `Uno/PretextSamples/Pretext/PretextLayout.Bidi.cs` |
 
-### Uno integration
+### Uno sample browser
 
 | Responsibility | File |
 | --- | --- |
-| Paragraph rendering using pooled `TextBlock`s | `Uno/PretextSamples/Pretext.Uno.Controls/PretextParagraphView.cs` |
-| Virtualized absolute-layout wrap surface | `Uno/PretextSamples/Pretext.Uno.Controls/PretextVirtualizedWrapPanel.cs` |
-| Virtualized non-uniform list surface | `Uno/PretextSamples/Pretext.Uno.Controls/PretextVirtualizedListBox.cs` |
-| Binary-search viewport occlusion index | `Uno/PretextSamples/Pretext.Uno.Controls/VerticalOcclusionIndex.cs` |
-| Shared scroll host and viewport projection | `Uno/PretextSamples/Pretext.Uno.Controls/StretchScrollHost.cs` |
-| Render coalescing | `Uno/PretextSamples/Pretext.Uno.Controls/UiRenderScheduler.cs` |
-| Template-indirection data contracts | `Uno/PretextSamples/Pretext.Uno.Controls/VirtualizedTextContracts.cs` |
+| Shared sample host and viewport projection | `Uno/PretextSamples/PretextSamples/Samples/SampleHostControls.cs` |
+| Sample shell helpers and obstacle geometry | `Uno/PretextSamples/PretextSamples/Samples/SampleInfrastructure.cs` |
+| Original Pretext demo views | `Uno/PretextSamples/PretextSamples/Samples/SampleViews.cs` |
+| Justification comparison demo | `Uno/PretextSamples/PretextSamples/Samples/JustificationComparisonSampleView.cs` |
 
 ## 3. Core runtime model
 
@@ -500,7 +497,7 @@ The C# port currently uses one main stepping function:
 
 `Layout(...)`, `LayoutWithLines(...)`, `LayoutNextLine(...)`, and `WalkLineRanges(...)` all build on that same stepper.
 
-This is semantically clean, but it is not identical to the TypeScript optimization structure. The TypeScript engine has a specialized simple fast path and a separate general walker. The C# port computes `SimpleLineWalkFastPath`, but the current line-walk implementation does not branch into a separate optimized execution path yet.
+This is semantically clean and now follows the same broad optimization shape as the TypeScript engine. The C# port computes `SimpleLineWalkFastPath`, branches into simple and general walkers, and keeps the rich text materialization work off the hot count path.
 
 ### 5.5.2 Visible end vs consumed end
 
@@ -531,28 +528,19 @@ The C# port preserves the big architectural win:
 - no UI-tree measurement in the layout phase
 - no Skia measurement during relayout after `Prepare(...)`
 
-However, it is not yet identical to the TypeScript micro-optimization level. Current differences:
+The remaining differences are narrower:
 
-- internal representation is object-heavy compared with TS parallel arrays
-- the line walker is unified rather than split into simple and general hot paths
-- chunk metadata is preserved but not exploited as aggressively as in TS
-- locale selection is stored but not currently used to drive segmentation
+- the C# port uses desktop-local Skia measurement instead of browser DOM/canvas calibration
 - browser-specific measurement shims are intentionally absent
+- the C# implementation stays optimized for framework-local determinism rather than browser-oracle fidelity
 
-In practice, the port is semantically close and fast enough for the current Uno samples, but the TypeScript engine still remains the stricter reference for browser-accuracy and hot-path specialization.
+In practice, the port is semantically close to the TypeScript engine and preserves the same major hot-path structure, while the TypeScript implementation remains the stricter browser-accuracy reference.
 
-## 6. Uno integration architecture
+## 6. Uno sample browser architecture
 
-The Uno integration does not replace the platform text renderer. Instead, it uses Pretext to externalize layout decisions and then feeds those decisions into retained WinUI/Uno controls.
+The remaining Uno integration is intentionally narrow: it exists to host the original Pretext demos, not to provide a generalized UI-layout framework.
 
-This is a crucial distinction:
-
-- Pretext computes text geometry
-- Uno `TextBlock` and related controls still paint the text
-
-That preserves native rendering and accessibility while avoiding expensive control-tree measurement loops.
-
-### 6.1 Stretch scroll host
+### 6.1 Shared sample host
 
 `StretchScrollHost` wraps page content in a `ScrollViewer` with a content host that always stretches to the viewport width.
 
@@ -562,117 +550,43 @@ It provides:
 - a consistent content width
 - viewport-to-local coordinate projection via `TryGetLocalViewportBounds(...)`
 
-That viewport projection is the basis for custom occlusion and virtualization.
+These helpers now live in `SampleHostControls.cs` as sample-local infrastructure rather than a reusable controls library.
 
 ### 6.2 Render coalescing
 
 `UiRenderScheduler` coalesces repeated invalidations into a single dispatcher pass.
 
-This keeps resize, scroll, and control events from causing redundant rerender work. Multiple upstream events collapse into one render action.
+This keeps resize, scroll, drag, and animation events from causing redundant rerender work in the heavier demos.
 
-### 6.3 Paragraph rendering
+### 6.3 Original demo surfaces
 
-`PretextParagraphView` is the simplest reusable integration primitive.
+The original Pretext demos that remain ported in Uno are:
 
-It:
+- accordion
+- bubbles
+- masonry
+- rich text
+- dynamic layout
+- editorial engine
+- justification comparison
+- variable typographic ASCII
 
-- calls `LayoutWithLines(...)`
-- keeps a pool of `TextBlock`s, one per visible line
-- reuses those `TextBlock`s between renders
-- places them absolutely on a `Canvas`
+They use Pretext in the same general way as the TypeScript demos:
 
-This means paragraph layout work happens in Pretext, not in a nested `TextBlock` measure/arrange pipeline.
+- prepare text once
+- reflow it arithmetically as widths or obstacle geometry change
+- keep page composition in userland instead of asking the framework to discover text height after the fact
 
-### 6.4 Absolute-layout virtualization
+### 6.4 Sample-specific helpers
 
-The high-throughput virtual controls are:
+Some demo pages still use sample-local pooling and viewport helpers inside `SampleViews.cs` and `SampleInfrastructure.cs`.
 
-- `PretextVirtualizedWrapPanel`
-- `PretextVirtualizedListBox`
+That code is intentionally treated as demo implementation detail, not shared platform abstraction:
 
-Both intentionally avoid built-in Uno items panels and virtualization panels for their core layout behavior.
-
-### 6.4.1 Common strategy
-
-The common strategy is:
-
-1. use Pretext to compute exact text-driven item heights
-2. build absolute placements for the whole logical surface
-3. compile those placements into vertical bands
-4. query the visible band range with binary search
-5. reuse a small pool of visuals for only the visible items
-
-The live UI cost therefore scales with visible content, not dataset size.
-
-### 6.4.2 Vertical occlusion index
-
-`VerticalOcclusionIndex` stores vertical bands and answers:
-
-- first band whose bottom is after `top`
-- first band whose top is after `bottom`
-
-The queries are binary searches, so viewport lookup is `O(log n)` in band count.
-
-This is the reusable occlusion primitive that lets the wrap panel and list box render only the items intersecting the current viewport plus overscan.
-
-### 6.4.3 Wrap panel
-
-`PretextVirtualizedWrapPanel` lays out non-uniform tiles by arithmetic:
-
-- each tile template already has a Pretext-derived body height
-- the control computes row placements across the available width
-- each row becomes a vertical band
-- only the rows intersecting the viewport are realized
-
-Important optimization: the data source uses `WrapTileTemplate` plus `templateIndices`. Many logical items can point at a smaller template set, so measurement is amortized.
-
-### 6.4.4 List box
-
-`PretextVirtualizedListBox` does the same for a vertically stacked non-uniform list:
-
-- body height comes from `PretextLayout.Layout(...)`
-- title and fixed chrome are added arithmetically
-- every item gets a known absolute rectangle
-- every item rectangle becomes a `VerticalBand`
-- only the visible range is realized
-
-Unlike a normal list control, item height is known before live UI realization because Pretext predicts it from text and font settings.
-
-### 6.4.5 Why this is fast
-
-The list and wrap controls avoid the classic expensive pattern:
-
-- create many controls
-- let the framework measure them
-- read those measurements
-- reposition them
-
-Instead they do:
-
-- measure template text once
-- compute all placements arithmetically
-- binary-search the viewport
-- reuse a bounded visual pool
-
-For large datasets, this is the difference between scaling with total item count and scaling with visible item count.
-
-### 6.5 Responsive and editorial samples
-
-The sample app uses the same primitives for more complex surfaces:
-
-- responsive app shells
-- editorial obstacle-aware layouts
-- dynamic manual text routing
-- side-by-side justification demos
-
-The common pattern is:
-
-- compute panel or obstacle geometry first
-- call Pretext with the available text width per slot
-- place normal Uno controls absolutely
-- avoid asking the visual tree how tall text became after the fact
-
-This is the reason the samples can use built-in Uno controls while still showcasing manual, app-defined layout behavior.
+- masonry predicts card heights before placement
+- editorial engine routes lines around live obstacles
+- dynamic layout fits title and body slots against changing geometry
+- justification comparison materializes custom columns from Pretext line walks
 
 ## 7. Why Pretext is fast
 
@@ -710,8 +624,7 @@ Caches exist at multiple levels:
 - measurement cache per font
 - grapheme width reuse
 - prepared-handle reuse across widths
-- pooled visuals in Uno controls
-- banded occlusion reuse across scroll passes
+- sample-local visual reuse in the heavier demos
 
 ### 7.4 Streaming geometry APIs
 
@@ -724,15 +637,15 @@ They let callers:
 - stop early
 - avoid building full paragraph strings when geometry alone is sufficient
 
-### 7.5 Bounded live visuals
+### 7.5 Bounded live visuals in demos
 
-The Uno integration layer keeps the number of live controls near the number of visible lines or items.
+The heavier Uno demos still keep live visuals bounded:
 
-That is why the 100k-item wrap and list samples are viable:
+- masonry reuses a limited card pool
+- editorial engine reuses text and orb layers
+- dynamic layout reuses logo and paragraph surfaces
 
-- logical dataset size can be large
-- measured template count can stay small
-- live visual count stays bounded
+That keeps the sample browser responsive without carrying a separate generalized controls framework in the port.
 
 ## 8. Validation and parity
 
@@ -767,25 +680,17 @@ These are the most important current differences:
 
 1. Browser profile detection
    - TypeScript adapts behavior by runtime browser.
-   - C# currently uses a fixed Chromium-flavored profile.
+   - C# uses a desktop-local profile backed by Skia measurement rather than browser runtime detection.
 
-2. Locale-sensitive segmentation
-   - TypeScript uses `Intl.Segmenter` and can retarget via `setLocale(...)`.
-   - C# keeps `SetLocale(...)` in the API, but the current tokenizer is still based on `StringInfo` plus Unicode-category heuristics.
-
-3. Emoji correction
+2. Measurement authority
    - TypeScript includes a DOM-vs-canvas correction shim.
    - C# treats Skia measurement as authoritative.
 
-4. Hot-path specialization
-   - TypeScript has explicit simple and general walkers.
-   - C# currently uses one main stepper.
+3. Rendering environment
+   - TypeScript is validated directly against browser layout behavior.
+   - C# is validated against the ported invariant tests and the Uno sample surfaces, not against a live browser rendering engine.
 
-5. Internal representation
-   - TypeScript is optimized around parallel arrays and lazy line-text caches.
-   - C# uses richer objects and read-only collections for clarity and portability.
-
-These differences do not invalidate the port. They describe where semantic parity is already strong and where low-level performance or browser-oracle fidelity still differs.
+These differences do not invalidate the port. They describe where semantic parity is already strong and where browser-oracle fidelity still differs by design.
 
 ## 10. Practical guidance for future work
 
@@ -795,7 +700,7 @@ When extending Pretext, keep these rules in mind:
 - keep `layout(...)` free of measurement and string construction
 - only compute rich metadata on the rich path
 - treat `walkLineRanges(...)` and `layoutNextLine(...)` as first-class APIs
-- prefer pooled visuals and absolute positioning for large custom surfaces
+- prefer sample-local pooling and absolute positioning only when a demo actually needs it
 - if a feature needs exact browser parity, validate it against the TypeScript engine first
 - if a feature needs cross-platform Uno stability, prefer deterministic Skia-backed behavior over browser quirks
 
@@ -806,7 +711,7 @@ Pretext is not primarily a text renderer. It is a high-performance text layout e
 - fast relayout on resize
 - predicted text heights
 - custom obstacle-aware page composition
-- non-uniform virtualization at large scale
-- responsive absolute layouts with built-in controls
+- userland editorial composition
+- browser- or framework-local demo rendering without repeated live text measurement
 
-The TypeScript implementation is the browser-accuracy reference. The C# port preserves the same public model and most of the same break semantics, then the Uno integration layer turns those prepared results into retained, pooled, viewport-aware UI. That combination is what makes the Uno sample set able to show complex editorial and large-data layouts without relying on built-in panel measurement as the source of truth.
+The TypeScript implementation is the browser-accuracy reference. The C# port preserves the same public model and most of the same break semantics, then the Uno sample browser uses those prepared results to drive the original demo set without relying on built-in text measurement as the source of truth.

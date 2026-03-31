@@ -7,8 +7,6 @@ Scope: adding real locale-sensitive segmentation behavior to the C# `Pretext` pr
 This document supplements:
 
 - `Uno/PRETEXT_TECHNICAL_SPEC.md`
-- `Uno/PRETEXT_UNO_UI_SYSTEM_SPEC.md`
-- `Uno/PRETEXT_TWO_PASS_LAYOUT_FRAMEWORK_ANALYSIS.md`
 
 It focuses specifically on the current locale gap in the C# port.
 
