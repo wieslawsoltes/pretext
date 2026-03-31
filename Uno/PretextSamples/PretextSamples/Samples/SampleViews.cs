@@ -14,7 +14,6 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
 using Pretext.Uno;
-using Pretext.Uno.Controls;
 using SkiaSharp;
 using Windows.Foundation;
 using Windows.Storage;
@@ -32,19 +31,9 @@ public sealed class OverviewSampleView : UserControl
             "This port keeps the library-style API shape from the original project and recreates the demo surface in native Uno views. The pages below focus on predicted line counts, shrinkwrap widths, manual line routing, and custom editorial geometry."));
 
         var cards = new StackPanel { Spacing = 16 };
-        cards.Children.Add(BuildFeatureCard("Two-Pass Panel", "A reusable LayoutPanel adapter fingerprints semantic input, prepares panel metadata once, and re-solves responsive card geometry on resize."));
-        cards.Children.Add(BuildFeatureCard("Two-Pass Control", "A reusable control host arranges keyed child controls from a prepared slot model, so compound cards can shift between stacked and split modes without nested Grid logic."));
-        cards.Children.Add(BuildFeatureCard("Shared Controls", "Framework-neutral sample definitions for a mail row and note card are hosted in Uno through the same control layout adapter used elsewhere in the browser."));
-        cards.Children.Add(BuildFeatureCard("Shared Items", "Framework-neutral wrap and masonry item definitions now feed the reusable virtualizing adapters, including sparse viewport selection for shortest-column masonry."));
-        cards.Children.Add(BuildFeatureCard("Two-Pass Repeater", "A reusable VirtualizingLayout adapter feeds exact non-uniform row geometry into ItemsRepeater while the shared core owns fingerprints, prepared items, and viewport queries."));
         cards.Children.Add(BuildFeatureCard("Accordion", "Predicted text heights drive section metadata without measuring the visible layout tree."));
         cards.Children.Add(BuildFeatureCard("Bubbles", "Binary-search shrinkwrap produces tighter multiline chat bubbles than width-to-widest-line sizing."));
         cards.Children.Add(BuildFeatureCard("Masonry", "Card heights come from the layout engine, so the grid can place content before the UI tree measures it."));
-        cards.Children.Add(BuildFeatureCard("Virtual Wrap", "A custom 100k-item wrap surface computes every tile box up front, then culls whole rows against the viewport."));
-        cards.Children.Add(BuildFeatureCard("Virtual List", "A ListBox-like 100k feed keeps exact non-uniform row heights without ItemsRepeater, ListView, or measured placeholders."));
-        cards.Children.Add(BuildFeatureCard("Todo App", "Built-in Uno controls are absolutely positioned into wide, medium, and narrow task-planning shells, while Pretext drives every variable text region."));
-        cards.Children.Add(BuildFeatureCard("Mail App", "A responsive inbox surface reflows folders, message rows, and the reader pane with explicit panel rects instead of adaptive Grid heuristics."));
-        cards.Children.Add(BuildFeatureCard("Notes App", "A note workspace swaps between stacked, split, and three-pane arrangements while Pretext keeps cards and editor previews geometrically exact."));
         cards.Children.Add(BuildFeatureCard("Rich Text", "Inline text, code spans, and atomic chips share one flow while only the text fragments split across lines."));
         cards.Children.Add(BuildFeatureCard("Dynamic Layout", "A fixed-height editorial spread with obstacle-aware title routing and continuous flow."));
         cards.Children.Add(BuildFeatureCard("Editorial Engine", "Animated orbs, live text reflow, pull quotes, and multi-column flow with zero UI-tree measurements."));

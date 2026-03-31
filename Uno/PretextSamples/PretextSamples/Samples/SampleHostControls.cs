@@ -1,11 +1,12 @@
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 
-namespace Pretext.Uno.Controls;
+namespace PretextSamples.Samples;
 
-public sealed class StretchScrollHost : Grid
+internal sealed class StretchScrollHost : Grid
 {
     private readonly Border _contentHost;
     private readonly ScrollViewer _scrollViewer;
@@ -81,5 +82,33 @@ public sealed class StretchScrollHost : Grid
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
         _contentHost.Width = Math.Max(0, e.NewSize.Width);
+    }
+}
+
+internal sealed class UiRenderScheduler
+{
+    private readonly DispatcherQueue _dispatcherQueue;
+    private readonly Action _action;
+    private bool _scheduled;
+
+    public UiRenderScheduler(DispatcherQueue dispatcherQueue, Action action)
+    {
+        _dispatcherQueue = dispatcherQueue;
+        _action = action;
+    }
+
+    public void Schedule()
+    {
+        if (_scheduled)
+        {
+            return;
+        }
+
+        _scheduled = true;
+        _dispatcherQueue.TryEnqueue(() =>
+        {
+            _scheduled = false;
+            _action();
+        });
     }
 }

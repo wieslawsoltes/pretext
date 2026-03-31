@@ -7,7 +7,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using Pretext.Uno;
-using Pretext.Uno.Controls;
 
 namespace PretextSamples.Samples;
 
